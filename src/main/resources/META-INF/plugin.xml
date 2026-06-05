@@ -1,0 +1,35 @@
+<!-- Plugin Configuration File. Read more: https://plugins.jetbrains.com/docs/intellij/plugin-configuration-file.html -->
+<idea-plugin>
+    <id>dev.akeen.worktreetasks</id>
+    <name>Worktree Tasks</name>
+    <vendor email="akeen.lewis@buildout.com">Akeen Lewis</vendor>
+    <description><![CDATA[
+        <p><b>Worktree Tasks</b> turns git worktrees into agentic coding "tasks".</p>
+        <p>Each task is a git worktree opened as its own IDE window, with a Claude Code session
+        running in that worktree's terminal. A sidebar lists your tasks and lets you create, open,
+        and remove them. Pairs with the official Claude Code plugin, which auto-activates whenever
+        <code>claude</code> runs in the integrated terminal.</p>
+    ]]></description>
+
+    <depends>com.intellij.modules.platform</depends>
+    <depends>Git4Idea</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
+
+    <extensions defaultExtensionNs="com.intellij">
+        <applicationService serviceImplementation="dev.akeen.worktreetasks.settings.WorktreeTasksSettings"/>
+        <applicationService serviceImplementation="dev.akeen.worktreetasks.service.TaskNameStore"/>
+
+        <toolWindow id="Worktree Tasks"
+                    anchor="left"
+                    icon="AllIcons.Vcs.Branch"
+                    factoryClass="dev.akeen.worktreetasks.ui.WorktreeToolWindowFactory"/>
+
+        <postStartupActivity implementation="dev.akeen.worktreetasks.startup.WorktreeOpenActivity"/>
+
+        <applicationConfigurable
+            parentId="tools"
+            instance="dev.akeen.worktreetasks.settings.WorktreeTasksConfigurable"
+            id="dev.akeen.worktreetasks.settings.WorktreeTasksConfigurable"
+            displayName="Worktree Tasks"/>
+    </extensions>
+</idea-plugin>
