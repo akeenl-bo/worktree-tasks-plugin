@@ -8,6 +8,7 @@ import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.StandardCopyOption
 
 /**
  * Provisions a worktree with files that git doesn't carry over but the app needs — gitignored
@@ -50,9 +51,48 @@ object WorktreeProvisioner {
         return created
     }
 
+    /**
+     * Seed a new worktree's IntelliJ project config from the main worktree so it inherits the Ruby
+     * SDK (and any shared run configurations) — otherwise RubyMine opens the worktree with a generic
+     * auto-detected SDK and the RSpec gutter/run configs don't work. Copies `.idea/misc.xml` (the
+     * project SDK pointer; SDKs are registered IDE-wide so the name resolves) and
+     * `.idea/runConfigurations/` if present. MUST run before the worktree project is opened (the IDE
+     * rewrites `.idea` on close, so seeding a live project would be clobbered).
+     */
+    fun seedIdeaConfig(mainWorktree: Path, worktreePath: Path) {
+        try {
+            if (mainWorktree.normalize() == worktreePath.normalize()) return
+            val srcIdea = mainWorktree.resolve(".idea")
+            if (!Files.isDirectory(srcIdea)) return
+            val dstIdea = worktreePath.resolve(".idea")
+            Files.createDirectories(dstIdea)
+
+            val miscSrc = srcIdea.resolve("misc.xml")
+            val miscDst = dstIdea.resolve("misc.xml")
+            // Only seed the SDK when the worktree doesn't already have a Ruby SDK, so we don't
+            // clobber later changes on repeat opens.
+            val needsSdk = !Files.isRegularFile(miscDst) || !Files.readString(miscDst).contains("RUBY_SDK")
+            if (Files.isRegularFile(miscSrc) && needsSdk) {
+                Files.copy(miscSrc, miscDst, StandardCopyOption.REPLACE_EXISTING)
+            }
+            val runSrc = srcIdea.resolve("runConfigurations")
+            if (Files.isDirectory(runSrc)) copyDir(runSrc, dstIdea.resolve("runConfigurations"))
+        } catch (t: Throwable) {
+            LOG.warn("Failed to seed .idea config into $worktreePath", t)
+        }
+    }
+
+    private fun copyDir(src: Path, dst: Path) {
+        Files.createDirectories(dst)
+        Files.list(src).use { stream ->
+            stream.filter { Files.isRegularFile(it) }.forEach { file ->
+                Files.copy(file, dst.resolve(file.fileName.toString()), StandardCopyOption.REPLACE_EXISTING)
+            }
+        }
+    }
+
     private fun mainWorktree(project: Project): Path? {
         val root = TaskService.getInstance(project).repoRoot() ?: return null
-        return WorktreeGit.list(project, root).firstOrNull { it.isMain }?.path?.normalize()
-            ?: root.normalize()
+        return WorktreeGit.mainWorktree(root).normalize()
     }
 }

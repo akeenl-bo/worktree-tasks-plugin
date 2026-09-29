@@ -48,7 +48,7 @@ class TaskService(private val project: Project) {
         val root = repoRoot() ?: return emptyList()
         val currentBase = project.basePath?.let { Path.of(it).normalize() }
         val store = TaskNameStore.getInstance()
-        return WorktreeGit.list(project, root)
+        return WorktreeGit.list(root)
             .filterNot { it.isBare }
             .map { wt ->
                 val normalized = wt.path.normalize()
@@ -64,7 +64,7 @@ class TaskService(private val project: Project) {
                     isMain = wt.isMain,
                     isCurrent = currentBase != null && currentBase == normalized,
                     isLocked = wt.isLocked,
-                    isDirty = WorktreeGit.isDirty(project, normalized),
+                    isDirty = WorktreeGit.isDirty(normalized),
                 )
             }
     }

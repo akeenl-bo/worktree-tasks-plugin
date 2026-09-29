@@ -11,15 +11,18 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.ui.SimpleToolWindowPanel
 import com.intellij.ui.ColoredListCellRenderer
 import com.intellij.ui.DoubleClickListener
+import com.intellij.ui.PopupHandler
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
 import com.intellij.util.Alarm
 import dev.akeen.worktreetasks.action.NewTaskAction
+import dev.akeen.worktreetasks.action.OpenBranchAction
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.ClaudeStatus
 import dev.akeen.worktreetasks.service.DevServerManager
@@ -31,6 +34,8 @@ import dev.akeen.worktreetasks.service.TasksChangedListener
 import dev.akeen.worktreetasks.service.WorktreeProvisioner
 import dev.akeen.worktreetasks.service.WorktreeTask
 import dev.akeen.worktreetasks.service.fireTasksChanged
+import dev.akeen.worktreetasks.service.fireTasksChangedEverywhere
+import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.LaunchMode
 import dev.akeen.worktreetasks.startup.PendingLaunchRegistry
 import dev.akeen.worktreetasks.startup.PendingOpen
@@ -65,11 +70,13 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
     init {
         val group = DefaultActionGroup().apply {
             add(NewTaskAction())
+            add(OpenBranchAction())
             add(OpenAction())
+            add(RunServerAction())
             add(StopServerAction())
             add(RunSetupAction())
             addSeparator()
-            add(RemoveTaskAction())
+            add(DeleteWorktreeAction())
             addSeparator()
             add(RefreshAction())
         }
@@ -77,6 +84,27 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         toolbar.targetComponent = list
         setToolbar(toolbar.component)
         setContent(JBScrollPane(list))
+
+        // Right-click menu (select the row under the cursor first).
+        val popupGroup = DefaultActionGroup().apply {
+            add(OpenAction())
+            add(RunServerAction())
+            add(StopServerAction())
+            add(RunSetupAction())
+            addSeparator()
+            add(DeleteWorktreeAction())
+        }
+        list.addMouseListener(object : java.awt.event.MouseAdapter() {
+            override fun mousePressed(e: MouseEvent) = selectOnPopup(e)
+            override fun mouseReleased(e: MouseEvent) = selectOnPopup(e)
+            private fun selectOnPopup(e: MouseEvent) {
+                if (e.isPopupTrigger) {
+                    val index = list.locationToIndex(e.point)
+                    if (index >= 0) list.selectedIndex = index
+                }
+            }
+        })
+        PopupHandler.installPopupMenu(list, popupGroup, "WorktreeTasksPopup")
 
         object : DoubleClickListener() {
             override fun onDoubleClick(event: MouseEvent): Boolean {
@@ -143,28 +171,57 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
      * installs deps if needed, launches Claude, and (if [activateServer]) starts the dev server.
      */
     private fun openWorktreeWindow(
+        // Opening just opens the window + Claude. Setup (yarn install) and the dev server are
+        // explicit button actions, so switching tabs never churns anything.
         task: WorktreeTask,
-        setup: SetupPolicy = SetupPolicy.IF_MISSING,
-        activateServer: Boolean = true,
+        setup: SetupPolicy = SetupPolicy.SKIP,
+        activateServer: Boolean = false,
     ) {
         val alreadyOpen = ProjectLauncher.findOpen(task.path)
         if (alreadyOpen != null) {
             ProjectLauncher.openOrFocus(task.path)
+            // Focus the existing Claude terminal (or relaunch if it was closed) without killing a
+            // live agent.
+            ClaudeLauncher.getInstance(alreadyOpen)
+                .focusOrLaunch(task.path, task.name, LaunchMode.CONTINUE)
             if (activateServer) {
                 DevServerManager.getInstance(alreadyOpen).activateWithSetupIfNeeded(task.name, task.path)
             }
             return
         }
-        PendingLaunchRegistry.getInstance().put(
-            task.path,
-            PendingOpen(task.name, LaunchMode.CONTINUE, setup, activateServer),
-        )
-        ProjectLauncher.openOrFocus(task.path)
+        // Seed .idea (Ruby SDK / run configs) off the EDT before opening, so RSpec-in-editor works.
+        val repoRoot = TaskService.getInstance(project).repoRoot()
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (repoRoot != null) {
+                WorktreeProvisioner.seedIdeaConfig(WorktreeGit.mainWorktree(repoRoot), task.path)
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                PendingLaunchRegistry.getInstance().put(
+                    task.path,
+                    PendingOpen(task.name, LaunchMode.CONTINUE, setup, activateServer),
+                )
+                ProjectLauncher.openOrFocus(task.path)
+            }
+        }
     }
 
     /** Whether [task]'s own window currently has its dev server running. */
     private fun serverActive(task: WorktreeTask): Boolean =
         ProjectLauncher.findOpen(task.path)?.let { DevServerManager.getInstance(it).isActive(task.path) } ?: false
+
+    /** Open/focus the worktree window and start its dev server (installing deps first if needed). */
+    private fun runServer(task: WorktreeTask) {
+        if (DevServerManager.getInstance(project).configuredCommands().isEmpty()) {
+            Messages.showInfoMessage(
+                project,
+                "No dev server commands configured.\nSet them in Settings | Tools | Worktree Tasks.",
+                "Run Server",
+            )
+            return
+        }
+        openWorktreeWindow(task, setup = SetupPolicy.IF_MISSING, activateServer = true)
+    }
 
     private fun stopServer(task: WorktreeTask) {
         ProjectLauncher.findOpen(task.path)?.let { DevServerManager.getInstance(it).stop() }
@@ -187,67 +244,71 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }.queue()
     }
 
-    private fun removeTask(task: WorktreeTask) {
+    private fun deleteWorktree(task: WorktreeTask) {
         if (task.isMain) {
-            Messages.showInfoMessage(project, "The main worktree cannot be removed as a task.", "Remove Task")
+            Messages.showInfoMessage(project, "The main worktree cannot be deleted.", "Delete Worktree")
             return
         }
         val confirm = Messages.showYesNoDialog(
             project,
-            "Remove task '${task.name}' and delete its worktree at:\n${task.path}",
-            "Remove Task",
-            Messages.getQuestionIcon(),
+            "Delete worktree '${task.name}' and remove the task?\n\n${task.path}\n\n" +
+                "This deletes the directory and discards any uncommitted changes in it.",
+            "Delete Worktree",
+            "Delete",
+            "Cancel",
+            Messages.getWarningIcon(),
         )
         if (confirm != Messages.YES) return
 
         val repoRoot = TaskService.getInstance(project).repoRoot() ?: return
+
+        // Stop its server and close its window/tab before deleting the directory.
         stopServer(task)
+        ProjectLauncher.findOpen(task.path)?.let { ProjectManager.getInstance().closeAndDispose(it) }
 
-        object : Task.Backgroundable(project, "Removing worktree '${task.name}'", true) {
-            override fun run(indicator: ProgressIndicator) {
-                var result = WorktreeGit.remove(project, repoRoot, task.path, force = false)
-                if (!result.success) {
-                    val force = askForceOnEdt(task, result.output)
-                    if (!force) return
-                    result = WorktreeGit.remove(project, repoRoot, task.path, force = true)
+        // Show a progress indicator. Tie it to a window that stays open (not the one we just
+        // closed); if none remains, fall back to a plain pooled thread.
+        val host = ProjectManager.getInstance().openProjects.firstOrNull { p ->
+            !p.isDisposed && (p.basePath?.let { Path.of(it).normalize() != task.path.normalize() } ?: false)
+        }
+        if (host != null) {
+            object : Task.Backgroundable(host, "Deleting worktree '${task.name}'…", false) {
+                override fun run(indicator: ProgressIndicator) {
+                    indicator.isIndeterminate = true
+                    performDelete(repoRoot, task)
                 }
-                if (!result.success) {
-                    showErrorOnEdt("git worktree remove failed:\n\n${result.output}")
-                    return
-                }
-                TaskNameStore.getInstance().remove(task.path.normalize().toString())
-
-                val branch = task.branch
-                if (branch != null && askDeleteBranchOnEdt(branch)) {
-                    val del = WorktreeGit.deleteBranch(project, repoRoot, branch, force = true)
-                    if (!del.success) showErrorOnEdt("Branch not deleted:\n\n${del.output}")
-                }
-
-                ApplicationManager.getApplication().invokeLater {
-                    if (!project.isDisposed) project.fireTasksChanged()
-                }
-            }
-        }.queue()
+            }.queue()
+        } else {
+            ApplicationManager.getApplication().executeOnPooledThread { performDelete(repoRoot, task) }
+        }
     }
 
-    private fun askForceOnEdt(task: WorktreeTask, output: String): Boolean {
-        var answer = false
-        ApplicationManager.getApplication().invokeAndWait {
-            answer = Messages.showYesNoDialog(
-                project,
-                "Could not remove worktree:\n\n$output\n\nForce remove (discards uncommitted changes)?",
-                "Remove Task",
-                Messages.getWarningIcon(),
-            ) == Messages.YES
+    private fun performDelete(repoRoot: Path, task: WorktreeTask) {
+        val main = WorktreeGit.mainWorktree(repoRoot)
+        // Force, so a provisioned worktree (node_modules, .idea, symlinked secrets, uncommitted
+        // work) is reliably deleted rather than refused.
+        val result = WorktreeGit.remove(main, task.path, force = true)
+        if (!result.success) {
+            showErrorOnEdt("git worktree remove failed:\n\n${result.output}")
+            return
         }
-        return answer
+        TaskNameStore.getInstance().remove(task.path.normalize().toString())
+
+        val branch = task.branch
+        if (branch != null && askDeleteBranchOnEdt(branch)) {
+            val del = WorktreeGit.deleteBranch(main, branch, force = true)
+            if (!del.success) showErrorOnEdt("Branch not deleted:\n\n${del.output}")
+        }
+
+        // Refresh every open window's task list now that the worktree is gone.
+        ApplicationManager.getApplication().invokeLater { fireTasksChangedEverywhere() }
     }
 
     private fun askDeleteBranchOnEdt(branch: String): Boolean {
         var answer = false
         ApplicationManager.getApplication().invokeAndWait {
             answer = Messages.showYesNoDialog(
-                project,
+                null,
                 "Also delete branch '$branch'? This cannot be undone.",
                 "Remove Task",
                 Messages.getQuestionIcon(),
@@ -258,16 +319,12 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
 
     private fun showErrorOnEdt(message: String) {
         ApplicationManager.getApplication().invokeLater {
-            Messages.showErrorDialog(project, message, "Remove Task")
+            Messages.showErrorDialog(null as Project?, message, "Remove Task")
         }
     }
 
     private inner class OpenAction :
-        AnAction(
-            "Open & Run",
-            "Open this worktree's window, run its dev server on the shared port, and open Claude",
-            AllIcons.Actions.Execute,
-        ) {
+        AnAction("Open", "Open or focus this worktree's window (Claude runs there)", AllIcons.Actions.MenuOpen) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun update(e: AnActionEvent) {
             e.presentation.isEnabled = selectedTask() != null
@@ -277,15 +334,27 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
     }
 
-    private inner class RemoveTaskAction :
-        AnAction("Remove Task", "Remove this task and its worktree", AllIcons.General.Remove) {
+    private inner class RunServerAction :
+        AnAction("Run Server", "Start this worktree's dev server (stops any other)", AllIcons.Actions.Execute) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val task = selectedTask()
+            e.presentation.isEnabled = task != null && !serverActive(task)
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            selectedTask()?.let { runServer(it) }
+        }
+    }
+
+    private inner class DeleteWorktreeAction :
+        AnAction("Delete Worktree", "Delete this worktree's directory and remove the task", AllIcons.Actions.GC) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun update(e: AnActionEvent) {
             val task = selectedTask()
             e.presentation.isEnabled = task != null && !task.isMain
         }
         override fun actionPerformed(e: AnActionEvent) {
-            selectedTask()?.let { removeTask(it) }
+            selectedTask()?.let { deleteWorktree(it) }
         }
     }
 
@@ -301,7 +370,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
     }
 
     private inner class RunSetupAction :
-        AnAction("Run Setup", "Run setup commands (e.g. yarn install) in this worktree", AllIcons.Actions.Download) {
+        AnAction("Install Deps", "Run setup commands (e.g. yarn install) — independent of the dev server", AllIcons.Actions.Download) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun update(e: AnActionEvent) {
             e.presentation.isEnabled = selectedTask() != null

@@ -41,7 +41,7 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
      * Each runs through a login shell in the worktree directory. Active-only: only the active task's
      * stack runs at a time.
      */
-    var devServerCommands: String = "ASSETS_COMPILE=true rails s\n./bin/shakapacker-dev-server"
+    var devServerCommands: String = "ASSETS_COMPILE=true rails s\n./bin/shakapacker-dev-server\nbundle exec sidekiq"
 
     /** Shell used to launch dev-server commands. Blank = `$SHELL`, then `/bin/zsh`. */
     var devServerShell: String = ""
@@ -66,9 +66,6 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
      * can boot. Uses the same shell as dev-server commands.
      */
     var setupCommands: String = "yarn install"
-
-    /** Run [setupCommands] automatically right after a task's worktree is created. */
-    var runSetupOnCreate: Boolean = true
 
     /**
      * Files to symlink from the main worktree into a new worktree, one relative path per line.

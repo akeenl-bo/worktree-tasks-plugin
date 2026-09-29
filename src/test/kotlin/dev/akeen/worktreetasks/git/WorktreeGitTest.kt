@@ -62,4 +62,35 @@ class WorktreeGitTest {
         assertTrue(WorktreeGit.parsePorcelain("").isEmpty())
         assertTrue(WorktreeGit.parsePorcelain("   \n  ").isEmpty())
     }
+
+    @Test
+    fun `builds branch refs flagging checked-out locals and dropping duplicate remotes`() {
+        val refs = WorktreeGit.buildBranchRefs(
+            checkedOut = setOf("master", "feature/x"),
+            locals = listOf("master", "feature/x", "wip"),
+            // remoteBranches() already strips */HEAD before this point.
+            remotes = listOf("origin/feature/x", "origin/release", "upstream/main"),
+        )
+
+        // master, feature/x, wip (sorted) then remote-only release, main (sorted).
+        assertEquals(
+            listOf("feature/x", "master", "wip", "origin/release", "upstream/main"),
+            refs.map { it.name },
+        )
+
+        val master = refs.first { it.name == "master" }
+        assertTrue(master.isCheckedOut)
+        assertFalse(master.isRemote)
+
+        val wip = refs.first { it.name == "wip" }
+        assertFalse(wip.isCheckedOut)
+
+        // origin/feature/x is dropped because the local feature/x already covers it.
+        assertNull(refs.firstOrNull { it.name == "origin/feature/x" })
+
+        val release = refs.first { it.name == "origin/release" }
+        assertTrue(release.isRemote)
+        assertEquals("origin", release.remote)
+        assertEquals("release", release.localName)
+    }
 }

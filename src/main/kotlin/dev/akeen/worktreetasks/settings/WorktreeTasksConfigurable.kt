@@ -70,10 +70,6 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
                     .applyToComponent { rows = 2 }
                     .comment("Run once in a new worktree (e.g. <code>yarn install</code>) — node_modules isn't shared.")
             }
-            row {
-                checkBox("Run setup automatically when a task is created")
-                    .bindSelected(settings::runSetupOnCreate)
-            }
             row("Linked files (one per line):") {
                 textArea()
                     .align(com.intellij.ui.dsl.builder.AlignX.FILL)

@@ -43,11 +43,14 @@ fun readClaudeStatus(worktreePath: Path): ClaudeStatus? {
     }
 }
 
+/** Tag embedded (as a shell comment) in commands we install, so we can find & replace our own. */
+private const val HOOK_TAG = "worktree-tasks-status"
+
 /**
  * Install Claude Code hooks into the worktree's gitignored `.claude/settings.local.json` so the
- * agent reports its status to a file the sidebar watches. Non-destructive: merges into any existing
- * local settings and is idempotent (keyed by the status-file path). Aborts rather than clobbering a
- * malformed file.
+ * agent reports its status to a file the sidebar watches. Non-destructive to the user's own hooks:
+ * it only replaces hooks we previously installed (identified by [HOOK_TAG]). Aborts rather than
+ * clobbering a malformed file.
  */
 fun installClaudeStatusHooks(worktreePath: Path) {
     try {
@@ -67,12 +70,13 @@ fun installClaudeStatusHooks(worktreePath: Path) {
         }
 
         val hooks = root.getAsJsonObject("hooks") ?: JsonObject().also { root.add("hooks", it) }
-        val statusPath = claudeDir.resolve(STATUS_FILE).toString()
-        val quoted = shellQuote(statusPath)
+        val q = shellQuote(claudeDir.resolve(STATUS_FILE).toString())
 
-        addHookIfMissing(hooks, "UserPromptSubmit", "printf %s working > $quoted", statusPath)
-        addHookIfMissing(hooks, "Stop", "printf %s done > $quoted", statusPath)
-        addHookIfMissing(hooks, "Notification", "printf %s input > $quoted", statusPath)
+        setOurHook(hooks, "UserPromptSubmit", "printf %s working > $q # $HOOK_TAG")
+        setOurHook(hooks, "Stop", "printf %s done > $q # $HOOK_TAG")
+        // Notification fires for permission requests AND on 60s idle. Only the former means "needs
+        // input"; ignore the idle ones (which would otherwise overwrite "done" and get stuck).
+        setOurHook(hooks, "Notification", "i=\$(cat); echo \"\$i\" | grep -qi permission && printf %s input > $q # $HOOK_TAG")
 
         Files.writeString(settingsFile, GsonBuilder().setPrettyPrinting().create().toJson(root))
     } catch (t: Throwable) {
@@ -80,22 +84,27 @@ fun installClaudeStatusHooks(worktreePath: Path) {
     }
 }
 
-private fun addHookIfMissing(hooks: JsonObject, event: String, command: String, marker: String) {
-    val groups = hooks.getAsJsonArray(event) ?: JsonArray().also { hooks.add(event, it) }
-    val present = groups.any { group ->
-        group.isJsonObject &&
-            group.asJsonObject.getAsJsonArray("hooks")?.any { hook ->
-                hook.isJsonObject &&
-                    hook.asJsonObject.get("command")?.takeIf { it.isJsonPrimitive }?.asString?.contains(marker) == true
-            } == true
-    }
-    if (present) return
+/** Replace our previously-installed hook for [event] (if any) with [command]; leave others intact. */
+private fun setOurHook(hooks: JsonObject, event: String, command: String) {
+    val existing = hooks.getAsJsonArray(event)
+    val kept = JsonArray()
+    existing?.forEach { group -> if (!isOurs(group)) kept.add(group) }
     val hook = JsonObject().apply {
         addProperty("type", "command")
         addProperty("command", command)
     }
-    val group = JsonObject().apply { add("hooks", JsonArray().apply { add(hook) }) }
-    groups.add(group)
+    kept.add(JsonObject().apply { add("hooks", JsonArray().apply { add(hook) }) })
+    hooks.add(event, kept)
 }
+
+// Matches our hooks by either the tag or the distinctive status-file name (so older untagged hooks
+// installed by previous versions are replaced rather than duplicated).
+private fun isOurs(group: com.google.gson.JsonElement): Boolean =
+    group.isJsonObject &&
+        group.asJsonObject.getAsJsonArray("hooks")?.any { hook ->
+            val command = hook.takeIf { it.isJsonObject }
+                ?.asJsonObject?.get("command")?.takeIf { it.isJsonPrimitive }?.asString
+            command != null && (command.contains(HOOK_TAG) || command.contains(STATUS_FILE))
+        } == true
 
 private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"

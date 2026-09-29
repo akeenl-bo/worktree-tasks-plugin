@@ -9,15 +9,10 @@ import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import dev.akeen.worktreetasks.git.WorktreeGit
-import dev.akeen.worktreetasks.service.TaskNameStore
 import dev.akeen.worktreetasks.service.TaskService
-import dev.akeen.worktreetasks.service.fireTasksChanged
+import dev.akeen.worktreetasks.service.WorktreeTaskLauncher
 import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
 import dev.akeen.worktreetasks.startup.LaunchMode
-import dev.akeen.worktreetasks.startup.PendingLaunchRegistry
-import dev.akeen.worktreetasks.startup.PendingOpen
-import dev.akeen.worktreetasks.startup.ProjectLauncher
-import dev.akeen.worktreetasks.startup.SetupPolicy
 import git4idea.repo.GitRepositoryManager
 import java.nio.file.Path
 
@@ -68,7 +63,7 @@ class NewTaskAction : AnAction("New Task", "Create a new worktree task", com.int
     ) {
         object : Task.Backgroundable(project, "Creating worktree '$name'", true) {
             override fun run(indicator: ProgressIndicator) {
-                val result = WorktreeGit.add(project, repoRoot, worktreePath, branch, baseBranch)
+                val result = WorktreeGit.add(repoRoot, worktreePath, branch, baseBranch)
                 if (!result.success) {
                     ApplicationManager.getApplication().invokeLater {
                         Messages.showErrorDialog(
@@ -80,29 +75,14 @@ class NewTaskAction : AnAction("New Task", "Create a new worktree task", com.int
                     return
                 }
 
-                val settings = WorktreeTasksSettings.getInstance()
-                TaskNameStore.getInstance().put(worktreePath.normalize().toString(), name)
-                val prompt = settings.initialPromptTemplate
+                val prompt = WorktreeTasksSettings.getInstance().initialPromptTemplate
                     .takeIf { it.isNotBlank() }
                     ?.replace("{task}", name)
-
-                // Open the new worktree as its own window; WorktreeOpenActivity then links secrets,
-                // installs deps, and launches Claude inside that window.
-                PendingLaunchRegistry.getInstance().put(
-                    worktreePath,
-                    PendingOpen(
-                        taskName = name,
-                        claudeMode = LaunchMode.NEW,
-                        setup = if (settings.runSetupOnCreate) SetupPolicy.IF_MISSING else SetupPolicy.SKIP,
-                        activateServer = false,
-                        initialPrompt = prompt,
-                    ),
+                WorktreeTaskLauncher.openCreated(
+                    project, repoRoot, name, worktreePath,
+                    claudeMode = LaunchMode.NEW,
+                    initialPrompt = prompt,
                 )
-                ApplicationManager.getApplication().invokeLater {
-                    if (project.isDisposed) return@invokeLater
-                    project.fireTasksChanged()
-                    if (settings.autoRunClaude) ProjectLauncher.openOrFocus(worktreePath)
-                }
             }
         }.queue()
     }
