@@ -4,6 +4,7 @@ import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.project.Project
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
+import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.LaunchMode
 import dev.akeen.worktreetasks.startup.PendingLaunchRegistry
 import dev.akeen.worktreetasks.startup.PendingOpen
@@ -53,6 +54,45 @@ object WorktreeTaskLauncher {
             if (project.isDisposed) return@invokeLater
             project.fireTasksChanged()
             if (settings.autoRunClaude) ProjectLauncher.openOrFocus(worktreePath)
+        }
+    }
+
+    /**
+     * Open or focus an existing task's own window. On first open, [WorktreeOpenActivity] links
+     * secrets, installs deps if needed, launches Claude, and (if [activateServer]) starts the dev server.
+     */
+    fun openExisting(
+        project: Project,
+        repoRoot: Path?,
+        name: String,
+        worktreePath: Path,
+        setup: SetupPolicy = SetupPolicy.SKIP,
+        activateServer: Boolean = false,
+    ) {
+        val alreadyOpen = ProjectLauncher.findOpen(worktreePath)
+        if (alreadyOpen != null) {
+            ProjectLauncher.openOrFocus(worktreePath)
+            // Focus the existing Claude terminal (or relaunch if it was closed) without killing a
+            // live agent.
+            ClaudeLauncher.getInstance(alreadyOpen).focusOrLaunch(worktreePath, name, LaunchMode.CONTINUE)
+            if (activateServer) {
+                DevServerManager.getInstance(alreadyOpen).activateWithSetupIfNeeded(name, worktreePath)
+            }
+            return
+        }
+        // Seed .idea (Ruby SDK / run configs) off the EDT before opening, so RSpec-in-editor works.
+        ApplicationManager.getApplication().executeOnPooledThread {
+            if (repoRoot != null) {
+                WorktreeProvisioner.seedIdeaConfig(WorktreeGit.mainWorktree(repoRoot), worktreePath)
+            }
+            ApplicationManager.getApplication().invokeLater {
+                if (project.isDisposed) return@invokeLater
+                PendingLaunchRegistry.getInstance().put(
+                    worktreePath,
+                    PendingOpen(name, LaunchMode.CONTINUE, setup, activateServer),
+                )
+                ProjectLauncher.openOrFocus(worktreePath)
+            }
         }
     }
 }

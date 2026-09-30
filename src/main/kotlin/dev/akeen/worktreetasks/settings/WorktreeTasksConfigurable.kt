@@ -2,6 +2,7 @@ package dev.akeen.worktreetasks.settings
 
 import com.intellij.openapi.application.ApplicationManager
 import com.intellij.openapi.application.ModalityState
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
 import com.intellij.openapi.ui.Messages
@@ -9,6 +10,8 @@ import com.intellij.ui.dsl.builder.bindIntText
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
+import dev.akeen.worktreetasks.jira.JiraConfig
+import dev.akeen.worktreetasks.jira.JiraCredentials
 import dev.akeen.worktreetasks.service.BrowserBridge
 
 /**
@@ -86,6 +89,35 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
                 intTextField(-1..65535)
                     .bindIntText(BrowserBridge::debugPort)
                     .comment("Lets each task's Claude drive its Task Browser over CDP. -1 = off. Use a free port such as 9333 (Chrome's own is 9222). Applies after an IDE restart.")
+            }
+        }
+        group("Jira Board") {
+            row("Config file:") {
+                textFieldWithBrowseButton(FileChooserDescriptorFactory.createSingleFileDescriptor("json").withTitle("Jira Board Config"))
+                    .align(com.intellij.ui.dsl.builder.AlignX.FILL)
+                    .bindText(settings::jiraConfigPath)
+                    .comment("Site, project, views, and field defaults, as JSON. Blank = <code>${JiraConfig.DEFAULT_PATH}</code>. Point it into a repo to track it; the board's gear menu opens it.")
+            }
+            row("Email:") {
+                textField().bindText(settings::jiraEmail)
+            }
+            row("API token:") {
+                passwordField()
+                    .bindText({ "" }, { typed -> if (typed.isNotBlank()) JiraCredentials.save(typed) })
+                    .applyToComponent { emptyText.text = if (settings.jiraTokenSaved) "Saved in Keychain; type a new one to replace it" else "" }
+                    .comment("Create one at <a href=\"https://id.atlassian.com/manage-profile/security/api-tokens\">id.atlassian.com</a>. Kept in the macOS Keychain, not in settings.")
+            }
+            row("Reload every (minutes):") {
+                intTextField(0..120)
+                    .bindIntText(settings::jiraPollMinutes)
+                    .comment("While the Jira Board is visible. 0 = only when you refresh.")
+            }
+            row("Task prompt:") {
+                textArea()
+                    .align(com.intellij.ui.dsl.builder.AlignX.FILL)
+                    .bindText(settings::jiraTaskPrompt)
+                    .applyToComponent { rows = 2 }
+                    .comment("Claude's first prompt for a task started from a ticket. <code>{key}</code>, <code>{summary}</code>, <code>{url}</code>.")
             }
         }
         group("Dev Server") {

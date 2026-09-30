@@ -93,6 +93,36 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
      */
     var linkedFiles: String = "config/master.key\n.env"
 
+    /**
+     * JSON file holding the Jira Board's site, project, views, and field defaults (see
+     * [dev.akeen.worktreetasks.jira.JiraConfig]). Blank = `~/.config/worktree-tasks/jira.json`.
+     */
+    var jiraConfigPath: String = ""
+
+    /** Atlassian account email, paired with the API token (kept in the password safe) for basic auth. */
+    var jiraEmail: String = ""
+
+    /** Whether an API token has been saved to the password safe (which can't be read on the EDT to check). */
+    var jiraTokenSaved: Boolean = false
+
+    /** How often a visible Jira Board reloads, in minutes. 0 = only on demand. */
+    var jiraPollMinutes: Int = 5
+
+    /**
+     * First prompt for a task started from a ticket. `{key}`, `{summary}` and `{url}` are filled in,
+     * so Claude reads the ticket through the Jira MCP the way it does when one is pasted.
+     */
+    var jiraTaskPrompt: String = "{key}: {summary}\n{url}"
+
+    /** Name of the view the Jira Board last showed. */
+    var jiraSelectedView: String = ""
+
+    /** Last value used per create-screen field, by field name, for fields the config file has no default for. */
+    var jiraLastFieldValues: MutableMap<String, String> = mutableMapOf()
+
+    /** Issue type the create dialog opens on. */
+    var jiraIssueType: String = "Story"
+
     override fun getState(): WorktreeTasksSettings = this
 
     override fun loadState(state: WorktreeTasksSettings) {

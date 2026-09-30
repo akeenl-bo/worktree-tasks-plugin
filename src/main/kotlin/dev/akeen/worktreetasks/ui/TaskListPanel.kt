@@ -40,12 +40,9 @@ import dev.akeen.worktreetasks.service.TaskService
 import dev.akeen.worktreetasks.service.TasksChangedListener
 import dev.akeen.worktreetasks.service.WorktreeProvisioner
 import dev.akeen.worktreetasks.service.WorktreeTask
+import dev.akeen.worktreetasks.service.WorktreeTaskLauncher
 import dev.akeen.worktreetasks.service.fireTasksChanged
 import dev.akeen.worktreetasks.service.fireTasksChangedEverywhere
-import dev.akeen.worktreetasks.startup.ClaudeLauncher
-import dev.akeen.worktreetasks.startup.LaunchMode
-import dev.akeen.worktreetasks.startup.PendingLaunchRegistry
-import dev.akeen.worktreetasks.startup.PendingOpen
 import dev.akeen.worktreetasks.startup.ProjectLauncher
 import dev.akeen.worktreetasks.startup.SetupPolicy
 import java.awt.event.MouseEvent
@@ -153,45 +150,14 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
     }
 
-    /**
-     * Open or focus the task's own window. On first open, [WorktreeOpenActivity] links secrets,
-     * installs deps if needed, launches Claude, and (if [activateServer]) starts the dev server.
-     */
+    /** Open or focus the task's own window (Claude runs there). */
     private fun openWorktreeWindow(
         // Opening just opens the window + Claude. Setup (yarn install) and the dev server are
         // explicit button actions, so switching tabs never churns anything.
         task: WorktreeTask,
         setup: SetupPolicy = SetupPolicy.SKIP,
         activateServer: Boolean = false,
-    ) {
-        val alreadyOpen = ProjectLauncher.findOpen(task.path)
-        if (alreadyOpen != null) {
-            ProjectLauncher.openOrFocus(task.path)
-            // Focus the existing Claude terminal (or relaunch if it was closed) without killing a
-            // live agent.
-            ClaudeLauncher.getInstance(alreadyOpen)
-                .focusOrLaunch(task.path, task.name, LaunchMode.CONTINUE)
-            if (activateServer) {
-                DevServerManager.getInstance(alreadyOpen).activateWithSetupIfNeeded(task.name, task.path)
-            }
-            return
-        }
-        // Seed .idea (Ruby SDK / run configs) off the EDT before opening, so RSpec-in-editor works.
-        val repoRoot = TaskService.getInstance(project).repoRoot()
-        ApplicationManager.getApplication().executeOnPooledThread {
-            if (repoRoot != null) {
-                WorktreeProvisioner.seedIdeaConfig(WorktreeGit.mainWorktree(repoRoot), task.path)
-            }
-            ApplicationManager.getApplication().invokeLater {
-                if (project.isDisposed) return@invokeLater
-                PendingLaunchRegistry.getInstance().put(
-                    task.path,
-                    PendingOpen(task.name, LaunchMode.CONTINUE, setup, activateServer),
-                )
-                ProjectLauncher.openOrFocus(task.path)
-            }
-        }
-    }
+    ) = WorktreeTaskLauncher.openExisting(project, TaskService.getInstance(project).repoRoot(), task.name, task.path, setup, activateServer)
 
     /** Whether [task]'s own window currently has its dev server running. */
     private fun serverActive(task: WorktreeTask): Boolean =

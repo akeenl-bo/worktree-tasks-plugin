@@ -56,6 +56,37 @@ Cookies persist in the IDE's JCEF cache, so a login sticks across windows and re
 `window.__worktreeTask = "<worktree path>"`, so Playwright's `chromium.connectOverCDP` can pick this
 task's page out of the IDE's embedded browsers and screenshot or click through exactly what you see.
 
+## Jira Board
+
+A bottom tool window showing Jira tickets in their board's columns, one saved view at a time.
+
+- **Start Task** (or double-click) — opens the ticket's task if a worktree branch already carries its
+  key; otherwise New Task pre-filled from the ticket, with **Assign to me** and **Move to In Progress**
+  checkboxes, and Claude's first prompt set to the ticket's key, summary, and link.
+- **Create Ticket** — summary, description, epic, plus every field the issue type's create screen
+  requires (custom fields included), pre-filled from `fieldDefaults`.
+- Reloads every few minutes while visible, and when its config file changes.
+
+The site, project, views, and field defaults live in a JSON file rather than the plugin, by default
+`~/.config/worktree-tasks/jira.json` (open it from the board's gear menu; point Settings at a file in
+any repo to track it). Views with a `boardId` use that board's filter and columns, narrowed by `jql`;
+views without one run `jql` alone, grouped by status. `repoPath` is where Start Task makes worktrees.
+
+```json
+{
+  "site": "https://your-site.atlassian.net",
+  "project": "PROJ",
+  "startStatus": "In Progress",
+  "fieldDefaults": { "Story Points": "2", "Components": "Platform" },
+  "views": [
+    { "name": "My tickets", "boardId": 42, "jql": "assignee = currentUser() AND statusCategory != Done", "repoPath": "~/dev/app", "epicKey": "" },
+    { "name": "Epic PROJ-100", "boardId": 0, "jql": "parent = PROJ-100 ORDER BY Rank", "repoPath": "~/dev/service", "epicKey": "PROJ-100" }
+  ]
+}
+```
+
+Your email and API token go in Settings; the token is kept in the macOS Keychain.
+
 ## Settings — Settings | Tools | Worktree Tasks
 
 - **Claude executable** (default `claude` on PATH)
@@ -65,6 +96,7 @@ task's page out of the IDE's embedded browsers and screenshot or click through e
 - **Dev Server**: commands (one per line), shell, shell args (`-i -l -c`), command prefix (`nvm use`)
 - **Worktree Setup**: setup commands, run-on-create toggle, linked files
 - **Task Browser**: URL, remote debugging port (for Claude over CDP)
+- **Jira Board**: config file, email, API token, reload interval, task prompt (`{key}`, `{summary}`, `{url}`)
 
 ## Building / running
 

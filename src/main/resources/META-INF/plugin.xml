@@ -36,6 +36,12 @@
                     doNotActivateOnStart="true"
                     factoryClass="dev.akeen.worktreetasks.ui.BrowserToolWindowFactory"/>
 
+        <toolWindow id="Jira Board"
+                    anchor="bottom"
+                    icon="AllIcons.Toolwindows.Task"
+                    doNotActivateOnStart="true"
+                    factoryClass="dev.akeen.worktreetasks.jira.JiraToolWindowFactory"/>
+
         <postStartupActivity implementation="dev.akeen.worktreetasks.startup.WorktreeOpenActivity"/>
 
         <notificationGroup id="Worktree Tasks" displayType="BALLOON"/>

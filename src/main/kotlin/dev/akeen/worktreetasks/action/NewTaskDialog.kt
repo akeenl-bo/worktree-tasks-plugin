@@ -4,12 +4,22 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
+import com.intellij.ui.components.JBCheckBox
 import com.intellij.ui.components.JBTextField
 import com.intellij.ui.dsl.builder.panel
 import java.nio.file.Path
 import javax.swing.JComponent
 import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
+
+/**
+ * An extra step a pre-filled New Task offers as a checkbox (e.g. "Assign to me" for a Jira ticket),
+ * run in the background before the worktree is made.
+ */
+class TaskOption(val label: String, val default: Boolean, val run: () -> Unit)
+
+/** What New Task opens with when it's started from somewhere else, such as a Jira ticket. */
+class TaskPrefill(val name: String, val prompt: String?, val options: List<TaskOption> = emptyList())
 
 /**
  * Collects the inputs for a new task: a friendly name, the parent branch to stack on (the remote
@@ -21,6 +31,7 @@ class NewTaskDialog(
     defaultBaseBranch: String,
     baseChoices: List<String>,
     private val worktreeBase: Path,
+    prefill: TaskPrefill? = null,
 ) : DialogWrapper(project) {
 
     private val nameField = JBTextField()
@@ -30,11 +41,13 @@ class NewTaskDialog(
     }
     private val pathField = JBTextField()
     private var pathEditedByUser = false
+    private val optionBoxes = prefill?.options.orEmpty().map { it to JBCheckBox(it.label, it.default) }
 
     val taskName: String get() = nameField.text.trim()
     val baseBranch: String get() = baseBranchField.editor.item?.toString()?.trim().orEmpty()
     val branchName: String get() = slug(taskName)
     val worktreePath: Path get() = Path.of(pathField.text.trim())
+    val chosenOptions: List<TaskOption> get() = optionBoxes.filter { (_, box) -> box.isSelected }.map { it.first }
 
     init {
         title = "New Worktree Task"
@@ -56,6 +69,7 @@ class NewTaskDialog(
                 if (pathField.hasFocus()) pathEditedByUser = true
             }
         })
+        prefill?.let { nameField.text = it.name }
         init()
     }
 
@@ -63,6 +77,7 @@ class NewTaskDialog(
         row("Task name:") { cell(nameField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
         row("Parent branch:") { cell(baseBranchField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
         row("Worktree path:") { cell(pathField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
+        optionBoxes.forEach { (_, box) -> row { cell(box) } }
     }.also { it.preferredSize = it.preferredSize.apply { width = 480 } }
 
     override fun getPreferredFocusedComponent(): JComponent = nameField
@@ -77,10 +92,16 @@ class NewTaskDialog(
     }
 
     companion object {
-        /** Turn a free-form task name into a filesystem/branch-safe slug. */
-        fun slug(name: String): String =
-            name.lowercase()
+        private const val MAX_SLUG = 60
+
+        /** Turn a free-form task name into a filesystem/branch-safe slug, cut at a word so ticket titles stay short. */
+        fun slug(name: String): String {
+            val full = name.lowercase()
                 .replace(Regex("[^a-z0-9]+"), "-")
                 .trim('-')
+            if (full.length <= MAX_SLUG) return full
+            val cut = full.substring(0, MAX_SLUG + 1).substringBeforeLast('-')
+            return cut.ifEmpty { full.substring(0, MAX_SLUG) }.trim('-')
+        }
     }
 }
