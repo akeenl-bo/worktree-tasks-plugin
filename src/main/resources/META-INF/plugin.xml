@@ -24,6 +24,12 @@
                     icon="AllIcons.Vcs.Branch"
                     factoryClass="dev.akeen.worktreetasks.ui.WorktreeToolWindowFactory"/>
 
+        <toolWindow id="Task Review"
+                    anchor="bottom"
+                    icon="AllIcons.Actions.Diff"
+                    doNotActivateOnStart="true"
+                    factoryClass="dev.akeen.worktreetasks.ui.ReviewToolWindowFactory"/>
+
         <postStartupActivity implementation="dev.akeen.worktreetasks.startup.WorktreeOpenActivity"/>
 
         <notificationGroup id="Worktree Tasks" displayType="BALLOON"/>

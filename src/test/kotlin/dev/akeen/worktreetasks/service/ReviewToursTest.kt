@@ -1,24 +1,25 @@
 package dev.akeen.worktreetasks.service
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReviewToursTest {
 
     @Test
-    fun `walks the tour once per file visit, then the rest outside-in with specs last`() {
+    fun `follows the tour's hops, merging only same-screen steps, then the rest outside-in with specs last`() {
         val tour = ReviewTours.parse(
             """
             {"title": "Record system text",
              "summary": ["When an admin opens a chat, turns load their instructions text"],
              "steps": [
-               {"file": "app/controllers/ai/admin/chats_controller.rb", "line": 67, "note": "Preloads the text"},
-               {"file": "app/controllers/ai/admin/chats_controller.rb", "line": 116, "note": "Markers compare text ids"},
-               {"file": "app/models/ai/system_text.rb", "line": 21, "note": "Stored once per distinct text"},
-               {"file": "app/models/ai/unchanged_caller.rb", "line": 7, "note": "Existing caller, unchanged"},
-               {"file": "app/models/ai/gone.rb", "note": "Stale step for a file that no longer exists"},
-               {"note": "No file, ignored"}
+               {"file": "app/controllers/ai/admin/chats_controller.rb", "line": 67, "label": "ChatsController#turns", "what": "Loads the turns."},
+               {"file": "app/controllers/ai/admin/chats_controller.rb", "line": 70, "what": "Orders them."},
+               {"file": "app/models/ai/system_text.rb", "line": 21, "label": "SystemText.for", "note": "Stored once per text",
+                "before": "Only the instructions.", "now": "Every system block."},
+               {"file": "app/controllers/ai/admin/chats_controller.rb", "line": 116, "label": "ChatsController#prompts_by_message_id"},
+               {"file": "app/models/ai/unchanged_caller.rb", "line": 7, "label": "Caller#call"},
+               {"file": "app/models/ai/gone.rb", "label": "Stale step for a deleted file"},
+               {"label": "No file, ignored"}
              ]}
             """.trimIndent(),
         )
@@ -35,22 +36,21 @@ class ReviewToursTest {
 
         assertEquals(
             listOf(
-                "app/controllers/ai/admin/chats_controller.rb",
-                "app/models/ai/system_text.rb",
-                "app/models/ai/unchanged_caller.rb",
+                "ChatsController#turns",
+                "SystemText.for",
+                "ChatsController#prompts_by_message_id",
+                "Caller#call",
                 "app/javascript/components/ai/admin/chat.tsx",
                 "app/models/ai/metrics/turn.rb",
                 "db/migrate/20260929200355_record_ai_turn_system_messages.rb",
                 "spec/models/ai/system_text_spec.rb",
             ),
-            steps.map { it.file },
+            steps.map { it.label ?: it.file },
         )
+        assertEquals("Loads the turns. Orders them.", steps[0].what)
         assertEquals(
-            ReviewStep("app/controllers/ai/admin/chats_controller.rb", 67, "Preloads the text · Markers compare text ids"),
-            steps[0],
+            ReviewStep("app/models/ai/system_text.rb", 21, "SystemText.for", "Stored once per text", "Only the instructions.", "Every system block."),
+            steps[1],
         )
-        val overview = ReviewTours.overview(tour, steps)!!
-        assertTrue(overview.contains("- When an admin opens a chat, turns load their instructions text"))
-        assertTrue(overview.contains("1. `app/controllers/ai/admin/chats_controller.rb` — Preloads the text"))
     }
 }

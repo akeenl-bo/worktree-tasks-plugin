@@ -1,9 +1,6 @@
 package dev.akeen.worktreetasks.service
 
 import com.intellij.diff.DiffContentFactory
-import com.intellij.diff.DiffDialogHints
-import com.intellij.diff.DiffManager
-import com.intellij.diff.chains.SimpleDiffRequestChain
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
 import com.intellij.diff.tools.fragmented.UnifiedDiffTool
@@ -25,25 +22,27 @@ import com.intellij.openapi.project.Project
 import com.intellij.openapi.ui.Messages
 import com.intellij.openapi.util.Pair
 import com.intellij.openapi.vfs.LocalFileSystem
+import com.intellij.openapi.wm.ToolWindowManager
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.ProjectLauncher
+import dev.akeen.worktreetasks.ui.ReviewPanel
 import java.nio.file.Files
 import java.nio.file.Path
 
 /**
- * Opens a task's changes as a guided tour in IntelliJ's diff window: one diff per [ReviewStep], titled
- * with its note and scrolled to its line, so next/previous walks the change in the order it runs.
- * The right side is the live file (editable). Each step has Comment and Send Comments to Claude
- * actions in the diff toolbar.
+ * Opens a task's changes as a guided tour in the Task Review tool window ([ReviewPanel]): the tour's
+ * overview and steps on the left, the current step's diff on the right, scrolled to its line. Steps on
+ * files the branch didn't change show the file alone, as context. The right side is the live file.
  */
 object ReviewTourService {
 
+    const val TOOL_WINDOW_ID = "Task Review"
     private const val NOTIFICATION_GROUP = "Worktree Tasks"
     const val ADDRESS_COMMENTS_PROMPT =
         "Address my review comments in ${ReviewTours.COMMENTS_FILE}, then delete that file and update ${ReviewTours.TOUR_FILE}."
 
-    private class Prepared(val step: ReviewStep, val baseText: String?)
+    private class Prepared(val step: ReviewStep, val changed: Boolean, val baseText: String?)
 
     fun open(project: Project, worktree: Path) {
         object : Task.Backgroundable(project, "Preparing review", false) {
@@ -59,10 +58,7 @@ object ReviewTourService {
                 }
                 val changes = WorktreeGit.changedFiles(worktree, base)
                 val tour = ReviewTours.read(worktree)
-                val steps = ReviewTours.steps(tour, changes.map { it.path }) {
-                    Files.isRegularFile(worktree.resolve(it))
-                }
-                val overview = ReviewTours.overview(tour, steps)
+                val steps = ReviewTours.steps(tour, changes.map { it.path }) { Files.isRegularFile(worktree.resolve(it)) }
                 if (steps.isEmpty()) {
                     notify(project, "No changes since $parentRef.")
                     return
@@ -70,50 +66,49 @@ object ReviewTourService {
                 val oldPaths = changes.associate { it.path to (it.oldPath ?: it.path) }
                 val prepared = steps.map { step ->
                     LocalFileSystem.getInstance().refreshAndFindFileByNioFile(worktree.resolve(step.file))
-                    Prepared(step, WorktreeGit.showFile(worktree, base, oldPaths[step.file] ?: step.file))
+                    val changed = step.file in oldPaths
+                    Prepared(step, changed, if (changed) WorktreeGit.showFile(worktree, base, oldPaths.getValue(step.file)) else null)
                 }
                 val baseLabel = "$parentRef @ ${base.take(8)}"
                 ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     val requests = prepared.mapIndexed { index, p -> request(project, worktree, p, index, prepared.size, baseLabel) }
-                    val chain = listOfNotNull(overview?.let { overviewRequest(project, it) }) + requests
-                    DiffManager.getInstance().showDiff(project, SimpleDiffRequestChain(chain), DiffDialogHints.FRAME)
+                    show(project, ReviewPanel(project, worktree, tour, steps, prepared.map { it.changed }, requests))
                 }
             }
         }.queue()
     }
 
-    private fun request(
-        project: Project,
-        worktree: Path,
-        prepared: Prepared,
-        index: Int,
-        total: Int,
-        baseLabel: String,
-    ): DiffRequest {
-        val factory = DiffContentFactory.getInstance()
-        val path = prepared.step.file
-        val fileType = FileTypeManager.getInstance().getFileTypeByFileName(path.substringAfterLast('/'))
-        val left = prepared.baseText?.takeUnless { fileType.isBinary }?.let { factory.create(project, it, fileType) }
-            ?: factory.createEmpty()
-        val right = LocalFileSystem.getInstance().findFileByNioFile(worktree.resolve(path))
-            ?.let { factory.create(project, it) }
-            ?: factory.createEmpty()
-        val title = "${index + 1}/$total  $path" + (prepared.step.note?.let { " — $it" } ?: "")
-        return SimpleDiffRequest(title, left, right, baseLabel, "Working tree").apply {
-            prepared.step.line?.let { putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, (it - 1).coerceAtLeast(0))) }
-            putUserData(DiffUserDataKeys.CONTEXT_ACTIONS, listOf(CommentAction(worktree, path), SendCommentsAction(worktree)))
-        }
+    private fun show(project: Project, panel: ReviewPanel) {
+        val toolWindow = ToolWindowManager.getInstance(project).getToolWindow(TOOL_WINDOW_ID) ?: return
+        val contents = toolWindow.contentManager
+        contents.removeAllContents(true)
+        val content = contents.factory.createContent(panel, panel.title, false).apply { setDisposer(panel) }
+        contents.addContent(content)
+        toolWindow.activate { panel.select(0) }
     }
 
-    /** A read-only, single-pane page of the tour's flow bullets and steps, shown before step 1. */
-    private fun overviewRequest(project: Project, text: String): DiffRequest {
-        val content = DiffContentFactory.getInstance()
-            .create(project, text, FileTypeManager.getInstance().getFileTypeByExtension("md"))
-        return SimpleDiffRequest("Overview", content, content, null, null).apply {
-            putUserData(DiffUserDataKeysEx.FORCE_DIFF_TOOL, UnifiedDiffTool.INSTANCE)
-            putUserData(DiffUserDataKeysEx.DISABLE_CONTENTS_EQUALS_NOTIFICATION, true)
-            putUserData(DiffUserDataKeys.FORCE_READ_ONLY, true)
+    private fun request(project: Project, worktree: Path, prepared: Prepared, index: Int, total: Int, baseLabel: String): DiffRequest {
+        val factory = DiffContentFactory.getInstance()
+        val step = prepared.step
+        val fileType = FileTypeManager.getInstance().getFileTypeByFileName(step.file.substringAfterLast('/'))
+        val live = LocalFileSystem.getInstance().findFileByNioFile(worktree.resolve(step.file))
+            ?.let { factory.create(project, it) }
+            ?: factory.createEmpty()
+        val title = "${index + 1}/$total · ${step.label ?: step.file}"
+        val request = if (prepared.changed) {
+            val before = prepared.baseText?.takeUnless { fileType.isBinary }?.let { factory.create(project, it, fileType) }
+                ?: factory.createEmpty()
+            SimpleDiffRequest(title, before, live, baseLabel, "Working tree")
+        } else {
+            SimpleDiffRequest(title, live, live, null, "Unchanged").apply {
+                putUserData(DiffUserDataKeysEx.FORCE_DIFF_TOOL, UnifiedDiffTool.INSTANCE)
+                putUserData(DiffUserDataKeysEx.DISABLE_CONTENTS_EQUALS_NOTIFICATION, true)
+            }
+        }
+        return request.apply {
+            step.line?.let { putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, (it - 1).coerceAtLeast(0))) }
+            putUserData(DiffUserDataKeys.CONTEXT_ACTIONS, listOf(CommentAction(worktree, step.file)))
         }
     }
 
@@ -138,7 +133,7 @@ object ReviewTourService {
     }
 
     /** Types [ADDRESS_COMMENTS_PROMPT] into the task's running Claude session. */
-    private class SendCommentsAction(private val worktree: Path) :
+    class SendCommentsAction(private val worktree: Path) :
         AnAction("Send Comments to Claude", "Ask this task's Claude session to address the review comments", AllIcons.Actions.Execute) {
         override fun getActionUpdateThread() = ActionUpdateThread.BGT
         override fun update(e: AnActionEvent) {
