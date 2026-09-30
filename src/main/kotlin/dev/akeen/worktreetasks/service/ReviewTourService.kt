@@ -6,7 +6,9 @@ import com.intellij.diff.DiffManager
 import com.intellij.diff.chains.SimpleDiffRequestChain
 import com.intellij.diff.requests.DiffRequest
 import com.intellij.diff.requests.SimpleDiffRequest
+import com.intellij.diff.tools.fragmented.UnifiedDiffTool
 import com.intellij.diff.util.DiffUserDataKeys
+import com.intellij.diff.util.DiffUserDataKeysEx
 import com.intellij.diff.util.Side
 import com.intellij.icons.AllIcons
 import com.intellij.notification.NotificationGroupManager
@@ -56,9 +58,11 @@ object ReviewTourService {
                     return
                 }
                 val changes = WorktreeGit.changedFiles(worktree, base)
-                val steps = ReviewTours.steps(ReviewTours.read(worktree), changes.map { it.path }) {
+                val tour = ReviewTours.read(worktree)
+                val steps = ReviewTours.steps(tour, changes.map { it.path }) {
                     Files.isRegularFile(worktree.resolve(it))
                 }
+                val overview = ReviewTours.overview(tour, steps)
                 if (steps.isEmpty()) {
                     notify(project, "No changes since $parentRef.")
                     return
@@ -72,7 +76,8 @@ object ReviewTourService {
                 ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     val requests = prepared.mapIndexed { index, p -> request(project, worktree, p, index, prepared.size, baseLabel) }
-                    DiffManager.getInstance().showDiff(project, SimpleDiffRequestChain(requests), DiffDialogHints.FRAME)
+                    val chain = listOfNotNull(overview?.let { overviewRequest(project, it) }) + requests
+                    DiffManager.getInstance().showDiff(project, SimpleDiffRequestChain(chain), DiffDialogHints.FRAME)
                 }
             }
         }.queue()
@@ -98,6 +103,17 @@ object ReviewTourService {
         return SimpleDiffRequest(title, left, right, baseLabel, "Working tree").apply {
             prepared.step.line?.let { putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, (it - 1).coerceAtLeast(0))) }
             putUserData(DiffUserDataKeys.CONTEXT_ACTIONS, listOf(CommentAction(worktree, path), SendCommentsAction(worktree)))
+        }
+    }
+
+    /** A read-only, single-pane page of the tour's flow bullets and steps, shown before step 1. */
+    private fun overviewRequest(project: Project, text: String): DiffRequest {
+        val content = DiffContentFactory.getInstance()
+            .create(project, text, FileTypeManager.getInstance().getFileTypeByExtension("md"))
+        return SimpleDiffRequest("Overview", content, content, null, null).apply {
+            putUserData(DiffUserDataKeysEx.FORCE_DIFF_TOOL, UnifiedDiffTool.INSTANCE)
+            putUserData(DiffUserDataKeysEx.DISABLE_CONTENTS_EQUALS_NOTIFICATION, true)
+            putUserData(DiffUserDataKeys.FORCE_READ_ONLY, true)
         }
     }
 
