@@ -76,43 +76,32 @@ class DevServerManager(private val project: Project) : Disposable {
         }
     }
 
-    /** One-time setup commands (e.g. `yarn install`) for this worktree. */
+    /** One-time setup commands (e.g. `yarn install`) for this worktree, run one after another. */
     @RequiresEdt
     fun runSetup(taskName: String, worktreePath: Path): Boolean {
         val commands = setupCommands()
         if (commands.isEmpty()) return false
-        for (command in commands) {
-            launchInConsole(command, worktreePath, "$taskName · setup: ${shortLabel(command)}")
-        }
+        runInOrder(taskName, worktreePath, commands) {}
         return true
     }
 
     /**
-     * Run setup commands, then invoke [onComplete] on the EDT once they all finish successfully.
+     * Run setup commands one at a time, then invoke [onComplete] on the EDT once the last succeeds.
      * If none are configured, [onComplete] runs immediately. Chains "install deps → start server".
      */
     @RequiresEdt
     fun runSetupThen(taskName: String, worktreePath: Path, onComplete: () -> Unit) {
-        val commands = setupCommands()
-        if (commands.isEmpty()) {
-            onComplete()
-            return
-        }
-        val remaining = java.util.concurrent.atomic.AtomicInteger(commands.size)
-        val anyFailed = java.util.concurrent.atomic.AtomicBoolean(false)
-        val onTerminated: (Int) -> Unit = { exitCode ->
-            if (exitCode != 0) anyFailed.set(true)
-            if (remaining.decrementAndGet() == 0) {
-                ApplicationManager.getApplication().invokeLater {
-                    if (!anyFailed.get() && !project.isDisposed) onComplete()
-                }
+        runInOrder(taskName, worktreePath, setupCommands(), onComplete)
+    }
+
+    /** Start [commands]' first line; each later line starts only after the previous one exits 0. */
+    private fun runInOrder(taskName: String, worktreePath: Path, commands: List<String>, onComplete: () -> Unit) {
+        val command = commands.firstOrNull() ?: return onComplete()
+        launchInConsole(command, worktreePath, "$taskName · setup: ${shortLabel(command)}") { exitCode ->
+            if (exitCode != 0) return@launchInConsole
+            ApplicationManager.getApplication().invokeLater {
+                if (!project.isDisposed) runInOrder(taskName, worktreePath, commands.drop(1), onComplete)
             }
-        }
-        for (command in commands) {
-            val launched = launchInConsole(
-                command, worktreePath, "$taskName · setup: ${shortLabel(command)}", onTerminated,
-            )
-            if (launched == null) onTerminated(-1) // failed to launch
         }
     }
 
