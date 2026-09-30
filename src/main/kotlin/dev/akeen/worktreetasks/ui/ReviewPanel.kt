@@ -70,16 +70,21 @@ class ReviewPanel(
             add(counter.apply { border = JBUI.Borders.emptyLeft(8) }, BorderLayout.CENTER)
         }
 
-        val overview = htmlPane().apply { text = overviewHtml() }
-        val stepsPanel = JPanel(BorderLayout()).apply {
-            add(overview, BorderLayout.NORTH)
-            add(JBScrollPane(stepList), BorderLayout.CENTER)
+        // Overview, steps and the step's explanation each scroll and resize on their own; IntelliJ
+        // remembers the splitter positions.
+        val overview = htmlPane().apply {
+            text = overviewHtml()
+            caretPosition = 0
         }
-        val left = JBSplitter(true, 0.5f).apply {
-            firstComponent = stepsPanel
+        val stepsAndDetail = JBSplitter(true, "WorktreeTasks.Review.steps", 0.45f).apply {
+            firstComponent = JBScrollPane(stepList)
             secondComponent = JBScrollPane(detail)
         }
-        val main = JBSplitter(false, 0.32f).apply {
+        val left = JBSplitter(true, "WorktreeTasks.Review.overview", 0.3f).apply {
+            firstComponent = JBScrollPane(overview)
+            secondComponent = stepsAndDetail
+        }
+        val main = JBSplitter(false, "WorktreeTasks.Review.main", 0.32f).apply {
             firstComponent = left
             secondComponent = diffPanel.component
         }
