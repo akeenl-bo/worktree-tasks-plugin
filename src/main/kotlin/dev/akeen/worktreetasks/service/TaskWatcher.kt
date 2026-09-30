@@ -142,6 +142,11 @@ class TaskWatcher : Disposable {
                 if (status == ClaudeStatus.NEEDS_INPUT) NotificationType.WARNING else NotificationType.INFORMATION,
             )
             .addAction(NotificationAction.createSimpleExpiring("Open") { focusTask(worktree.path, name) })
+        if (status == ClaudeStatus.DONE) {
+            notification.addAction(NotificationAction.createSimpleExpiring("Review") {
+                (ProjectLauncher.findOpen(worktree.path) ?: active)?.let { ReviewTourService.open(it, worktree.path) }
+            })
+        }
         notification.notify(active)
         if (!app.isActive) SystemNotifications.getInstance().notify(NOTIFICATION_GROUP, message, "")
     }

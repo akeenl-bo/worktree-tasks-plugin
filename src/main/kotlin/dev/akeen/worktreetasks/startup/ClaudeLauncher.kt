@@ -68,6 +68,20 @@ class ClaudeLauncher(private val project: Project) {
         }
     }
 
+    /**
+     * Type [text] into this window's live Claude session and submit it, then focus the terminal.
+     * Returns false when no Claude terminal is running here. Call on the EDT.
+     */
+    fun sendPrompt(text: String): Boolean {
+        val widget = current ?: return false
+        val alive = runCatching { TerminalToolWindowManager.getInstance(project).getContainer(widget) }.getOrNull() != null
+        if (!alive) return false
+        widget.sendCommandToExecute(text)
+        ToolWindowManager.getInstance(project).getToolWindow("Terminal")?.show()
+        widget.requestFocus()
+        return true
+    }
+
     private fun doLaunch(worktreePath: Path, taskName: String, mode: LaunchMode, initialPrompt: String?) {
         val settings = WorktreeTasksSettings.getInstance()
         // --continue fails when no prior conversation exists for this dir, so fall back to NEW.

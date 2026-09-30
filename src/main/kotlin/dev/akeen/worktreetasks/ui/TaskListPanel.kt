@@ -26,6 +26,7 @@ import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.ClaudeStatus
 import dev.akeen.worktreetasks.service.DevServerManager
 import dev.akeen.worktreetasks.service.ParentSync
+import dev.akeen.worktreetasks.service.ReviewTourService
 import dev.akeen.worktreetasks.service.TASKS_CHANGED
 import dev.akeen.worktreetasks.service.TASK_STATUS_CHANGED
 import dev.akeen.worktreetasks.service.TaskStatusListener
@@ -72,6 +73,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(StopServerAction())
             add(RunSetupAction())
             add(RebaseOnParentAction())
+            add(ReviewAction())
             addSeparator()
             add(DeleteWorktreeAction())
             addSeparator()
@@ -89,6 +91,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(StopServerAction())
             add(RunSetupAction())
             addSeparator()
+            add(ReviewAction())
             add(RebaseOnParentAction())
             add(ChangeParentAction())
             add(RetargetAction())
@@ -355,6 +358,17 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
         override fun actionPerformed(e: AnActionEvent) {
             selectedTask()?.let { runSetupFor(it) }
+        }
+    }
+
+    private inner class ReviewAction :
+        AnAction("Review Changes", "Step through this task's changes since its parent, as a guided tour", AllIcons.Actions.Diff) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            e.presentation.isEnabled = selectedTask() != null
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            selectedTask()?.let { ReviewTourService.open(project, it.path) }
         }
     }
 

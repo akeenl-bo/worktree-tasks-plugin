@@ -31,8 +31,11 @@ object WorktreeGit {
         val isMain: Boolean,
     )
 
-    /** Result of a mutating git command. */
-    data class CommandResult(val success: Boolean, val output: String, val exitCode: Int)
+    /** Result of a git command: [output] is stdout + stderr trimmed; [stdout] is stdout untouched. */
+    data class CommandResult(val success: Boolean, val output: String, val exitCode: Int, val stdout: String = output)
+
+    /** A file that differs between some base commit and the working tree ([status] as in `--name-status`). */
+    data class FileChange(val status: Char, val path: String, val oldPath: String? = null)
 
     /** An existing branch the user can open in a worktree. */
     data class BranchRef(
@@ -71,7 +74,7 @@ object WorktreeGit {
                 append(out.stderr)
             }
         }.trim()
-        return CommandResult(out.exitCode == 0, combined, out.exitCode)
+        return CommandResult(out.exitCode == 0, combined, out.exitCode, out.stdout)
     }
 
     /** List all worktrees for the repository rooted at [repoRoot]. */
@@ -277,6 +280,39 @@ object WorktreeGit {
 
     fun configSet(workDir: Path, key: String, value: String): CommandResult =
         run(workDir, "config", key, value)
+
+    /**
+     * Committed and uncommitted changes since [base], plus untracked files. IDE metadata (`.idea/`,
+     * which worktree provisioning seeds and many repos don't ignore) is left out.
+     */
+    fun changedFiles(workDir: Path, base: String): List<FileChange> {
+        val diff = run(workDir, "-c", "core.quotePath=false", "diff", "--name-status", "-M", base)
+        val tracked = if (diff.success) parseNameStatus(diff.output) else emptyList()
+        val others = run(workDir, "-c", "core.quotePath=false", "ls-files", "--others", "--exclude-standard")
+        val untracked = if (others.success) {
+            others.output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.map { FileChange('A', it) }.toList()
+        } else {
+            emptyList()
+        }
+        return (tracked + untracked).filterNot { it.path.startsWith(".idea/") }
+    }
+
+    /** [path]'s exact content at [rev], or null when it didn't exist there. */
+    fun showFile(workDir: Path, rev: String, path: String): String? {
+        val result = run(workDir, "show", "$rev:$path")
+        return if (result.success) result.stdout else null
+    }
+
+    internal fun parseNameStatus(output: String): List<FileChange> =
+        output.lineSequence().mapNotNull { line ->
+            val parts = line.split('\t')
+            val code = parts.firstOrNull()?.firstOrNull() ?: return@mapNotNull null
+            if (code == 'R' || code == 'C') {
+                parts.getOrNull(2)?.let { FileChange(code, it, oldPath = parts[1]) }
+            } else {
+                parts.getOrNull(1)?.let { FileChange(code, it) }
+            }
+        }.toList()
 
     /**
      * Default base directory for new worktrees: a sibling `<repo-name>-worktrees` folder next to
