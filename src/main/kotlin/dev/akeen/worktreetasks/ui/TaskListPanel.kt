@@ -20,15 +20,16 @@ import com.intellij.ui.PopupHandler
 import com.intellij.ui.SimpleTextAttributes
 import com.intellij.ui.components.JBList
 import com.intellij.ui.components.JBScrollPane
-import com.intellij.util.Alarm
 import dev.akeen.worktreetasks.action.NewTaskAction
 import dev.akeen.worktreetasks.action.OpenBranchAction
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.ClaudeStatus
 import dev.akeen.worktreetasks.service.DevServerManager
 import dev.akeen.worktreetasks.service.ParentSync
-import dev.akeen.worktreetasks.service.readClaudeStatus
 import dev.akeen.worktreetasks.service.TASKS_CHANGED
+import dev.akeen.worktreetasks.service.TASK_STATUS_CHANGED
+import dev.akeen.worktreetasks.service.TaskStatusListener
+import dev.akeen.worktreetasks.service.TaskWatcher
 import dev.akeen.worktreetasks.service.TaskNameStore
 import dev.akeen.worktreetasks.service.TaskService
 import dev.akeen.worktreetasks.service.TasksChangedListener
@@ -44,7 +45,6 @@ import dev.akeen.worktreetasks.startup.ProjectLauncher
 import dev.akeen.worktreetasks.startup.SetupPolicy
 import java.awt.event.MouseEvent
 import java.nio.file.Path
-import java.util.concurrent.ConcurrentHashMap
 import javax.swing.DefaultListModel
 import javax.swing.JList
 import javax.swing.ListSelectionModel
@@ -62,11 +62,6 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         cellRenderer = TaskRenderer()
         emptyText.text = "No worktree tasks yet"
     }
-
-    // Claude status per worktree, polled from the hook-written status files.
-    private val statuses = ConcurrentHashMap<Path, ClaudeStatus>()
-    @Volatile private var taskPaths: List<Path> = emptyList()
-    private val statusAlarm = Alarm(Alarm.ThreadToUse.POOLED_THREAD, project)
 
     init {
         val group = DefaultActionGroup().apply {
@@ -121,34 +116,12 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
 
         project.messageBus.connect(project)
             .subscribe(TASKS_CHANGED, TasksChangedListener { refresh() })
+        // Status comes from the app-wide watcher; a status flip only needs a repaint, not a reload.
+        ApplicationManager.getApplication().messageBus.connect(project)
+            .subscribe(TASK_STATUS_CHANGED, TaskStatusListener { if (!project.isDisposed) list.repaint() })
+        TaskWatcher.getInstance().ensureStarted()
 
         refresh()
-        scheduleStatusPoll()
-    }
-
-    private fun scheduleStatusPoll() {
-        if (project.isDisposed) return
-        statusAlarm.addRequest({
-            pollStatuses()
-            scheduleStatusPoll()
-        }, STATUS_POLL_MS)
-    }
-
-    /** Read each worktree's Claude status file (off the EDT); repaint if anything changed. */
-    private fun pollStatuses() {
-        var changed = false
-        val live = taskPaths
-        for (path in live) {
-            val current = readClaudeStatus(path)
-            val previous = if (current == null) statuses.remove(path) else statuses.put(path, current)
-            if (previous != current) changed = true
-        }
-        statuses.keys.retainAll(live.toSet())
-        if (changed) {
-            ApplicationManager.getApplication().invokeLater {
-                if (!project.isDisposed) list.repaint()
-            }
-        }
     }
 
     private fun selectedTask(): WorktreeTask? = list.selectedValue
@@ -161,7 +134,6 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
                 Logger.getInstance(TaskListPanel::class.java).warn("Failed to list worktree tasks", t)
                 emptyList()
             }
-            taskPaths = tasks.map { it.path.normalize() }
             ApplicationManager.getApplication().invokeLater {
                 val previouslySelected = list.selectedValue?.path
                 model.clear()
@@ -464,16 +436,12 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             if (serverActive(value)) {
                 append("  ▶ serving", SimpleTextAttributes.SYNTHETIC_ATTRIBUTES)
             }
-            when (statuses[value.path.normalize()]) {
+            when (TaskWatcher.getInstance().status(value.path)) {
                 ClaudeStatus.WORKING -> append("  ⋯ working", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
                 ClaudeStatus.NEEDS_INPUT -> append("  ● needs input", SimpleTextAttributes.ERROR_ATTRIBUTES)
                 ClaudeStatus.DONE -> append("  ✓ done", SimpleTextAttributes.GRAYED_ATTRIBUTES)
                 null -> {}
             }
         }
-    }
-
-    companion object {
-        private const val STATUS_POLL_MS = 2000
     }
 }

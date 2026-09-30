@@ -5,8 +5,10 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.startup.ProjectActivity
 import com.intellij.openapi.wm.ToolWindowManager
+import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.DevServerManager
 import dev.akeen.worktreetasks.service.ParentSync
+import dev.akeen.worktreetasks.service.TaskWatcher
 import dev.akeen.worktreetasks.service.WorktreeProvisioner
 import dev.akeen.worktreetasks.service.installClaudeStatusHooks
 import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
@@ -26,7 +28,11 @@ class WorktreeOpenActivity : ProjectActivity {
         val path = Path.of(base)
         val pending = PendingLaunchRegistry.getInstance().take(path)
 
+        TaskWatcher.getInstance().ensureStarted()
+
         ApplicationManager.getApplication().executeOnPooledThread {
+            // Every task window reports its Claude status, however it was opened.
+            if (WorktreeGit.list(path).any { it.path.normalize() == path.normalize() }) installClaudeStatusHooks(path)
             // A brand-new task was just cut from a fresh fetch; anything reopened may be behind its parent.
             if (pending?.claudeMode != LaunchMode.NEW) {
                 try {
@@ -39,8 +45,6 @@ class WorktreeOpenActivity : ProjectActivity {
 
             // Link gitignored secrets/config off the EDT (shells out to git to find the main worktree).
             WorktreeProvisioner.linkSharedFiles(project, path)
-            // Install status hooks before Claude starts so it reports working/needs-input/done.
-            installClaudeStatusHooks(path)
             val needsSetup = when (pending.setup) {
                 SetupPolicy.SKIP -> false
                 SetupPolicy.FORCE -> setupConfigured()

@@ -24,3 +24,11 @@ fun Project.fireTasksChanged() {
 fun fireTasksChangedEverywhere() {
     ProjectManager.getInstance().openProjects.forEach { it.fireTasksChanged() }
 }
+
+/** Application topic fired when some task's Claude status changes; sidebars just repaint. */
+fun interface TaskStatusListener {
+    fun statusChanged()
+}
+
+val TASK_STATUS_CHANGED: Topic<TaskStatusListener> =
+    Topic.create("Worktree task status changed", TaskStatusListener::class.java)

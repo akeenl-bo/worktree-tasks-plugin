@@ -74,9 +74,13 @@ fun installClaudeStatusHooks(worktreePath: Path) {
 
         setOurHook(hooks, "UserPromptSubmit", "printf %s working > $q # $HOOK_TAG")
         setOurHook(hooks, "Stop", "printf %s done > $q # $HOOK_TAG")
-        // Notification fires for permission requests AND on 60s idle. Only the former means "needs
-        // input"; ignore the idle ones (which would otherwise overwrite "done" and get stuck).
-        setOurHook(hooks, "Notification", "i=\$(cat); echo \"\$i\" | grep -qi permission && printf %s input > $q # $HOOK_TAG")
+        // Only permission and elicitation prompts mean "needs input"; the 60s idle notification would
+        // overwrite "done" and get stuck.
+        setOurHook(hooks, "Notification", "printf %s input > $q # $HOOK_TAG", "permission_prompt|elicitation_dialog")
+        // Asking a question or presenting a plan waits on the user without a Notification.
+        setOurHook(hooks, "PreToolUse", "printf %s input > $q # $HOOK_TAG", WAITING_TOOLS)
+        setOurHook(hooks, "PostToolUse", "printf %s working > $q # $HOOK_TAG", WAITING_TOOLS)
+        setOurHook(hooks, "SessionEnd", "rm -f $q # $HOOK_TAG")
 
         Files.writeString(settingsFile, GsonBuilder().setPrettyPrinting().create().toJson(root))
     } catch (t: Throwable) {
@@ -84,8 +88,10 @@ fun installClaudeStatusHooks(worktreePath: Path) {
     }
 }
 
+private const val WAITING_TOOLS = "AskUserQuestion|ExitPlanMode"
+
 /** Replace our previously-installed hook for [event] (if any) with [command]; leave others intact. */
-private fun setOurHook(hooks: JsonObject, event: String, command: String) {
+private fun setOurHook(hooks: JsonObject, event: String, command: String, matcher: String? = null) {
     val existing = hooks.getAsJsonArray(event)
     val kept = JsonArray()
     existing?.forEach { group -> if (!isOurs(group)) kept.add(group) }
@@ -93,7 +99,12 @@ private fun setOurHook(hooks: JsonObject, event: String, command: String) {
         addProperty("type", "command")
         addProperty("command", command)
     }
-    kept.add(JsonObject().apply { add("hooks", JsonArray().apply { add(hook) }) })
+    kept.add(
+        JsonObject().apply {
+            matcher?.let { addProperty("matcher", it) }
+            add("hooks", JsonArray().apply { add(hook) })
+        },
+    )
     hooks.add(event, kept)
 }
 
