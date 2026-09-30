@@ -42,6 +42,20 @@ The plugin merges Claude Code hooks into each worktree's gitignored `.claude/set
 (`UserPromptSubmit`/`Notification`/`Stop`) that write a status file the sidebar polls — so you can see
 which agents are working, waiting on you, or done across all windows.
 
+## Task Browser
+
+A right-side tool window with an embedded Chromium (JCEF) on the dev server (`http://localhost:3000`
+by default), so the app can be used without leaving the IDE: back / forward / reload, an address bar,
+DevTools, and open-in-external-browser. Only one task's server runs at a time on the shared port, so
+the header says which task is serving; when a server starts, the page reloads once the URL answers.
+Cookies persist in the IDE's JCEF cache, so a login sticks across windows and restarts.
+
+**Claude can drive it.** Set **Remote debugging port** (e.g. `9333`; it sets the IDE registry key
+`ide.browser.jcef.debug.port` and needs a restart). Each open Task Browser then writes
+`.claude/.worktree-browser` (`{"cdp": ..., "worktree": ...}`) and tags its page with
+`window.__worktreeTask = "<worktree path>"`, so Playwright's `chromium.connectOverCDP` can pick this
+task's page out of the IDE's embedded browsers and screenshot or click through exactly what you see.
+
 ## Settings — Settings | Tools | Worktree Tasks
 
 - **Claude executable** (default `claude` on PATH)
@@ -50,6 +64,7 @@ which agents are working, waiting on you, or done across all windows.
 - **Run claude automatically** on task open; **initial prompt template** (`{task}` placeholder)
 - **Dev Server**: commands (one per line), shell, shell args (`-i -l -c`), command prefix (`nvm use`)
 - **Worktree Setup**: setup commands, run-on-create toggle, linked files
+- **Task Browser**: URL, remote debugging port (for Claude over CDP)
 
 ## Building / running
 

@@ -1,11 +1,15 @@
 package dev.akeen.worktreetasks.settings
 
+import com.intellij.openapi.application.ApplicationManager
+import com.intellij.openapi.application.ModalityState
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
+import com.intellij.openapi.ui.Messages
 import com.intellij.ui.dsl.builder.bindIntText
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
+import dev.akeen.worktreetasks.service.BrowserBridge
 
 /**
  * Settings UI shown under Settings | Tools | Worktree Tasks.
@@ -13,6 +17,22 @@ import com.intellij.ui.dsl.builder.panel
 class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
 
     private val settings = WorktreeTasksSettings.getInstance()
+
+    override fun apply() {
+        val port = BrowserBridge.debugPort
+        super.apply()
+        if (BrowserBridge.debugPort == port) return
+        val restart = Messages.showYesNoDialog(
+            "The remote debugging port applies after the IDE restarts. Restart now?",
+            "Task Browser",
+            "Restart",
+            "Later",
+            null,
+        )
+        if (restart == Messages.YES) {
+            ApplicationManager.getApplication().invokeLater({ ApplicationManager.getApplication().restart() }, ModalityState.nonModal())
+        }
+    }
 
     override fun createPanel(): DialogPanel = panel {
         row("Claude executable:") {
@@ -54,6 +74,18 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
                 intTextField(0..120)
                     .bindIntText(settings::prPollMinutes)
                     .comment("0 turns PR watching off.")
+            }
+        }
+        group("Task Browser") {
+            row("URL:") {
+                textField()
+                    .bindText(settings::browserUrl)
+                    .comment("Shown in the Task Browser tool window, and reloaded once a task's dev server answers.")
+            }
+            row("Remote debugging port:") {
+                intTextField(-1..65535)
+                    .bindIntText(BrowserBridge::debugPort)
+                    .comment("Lets each task's Claude drive its Task Browser over CDP. -1 = off. Use a free port such as 9333 (Chrome's own is 9222). Applies after an IDE restart.")
             }
         }
         group("Dev Server") {

@@ -30,6 +30,12 @@
                     doNotActivateOnStart="true"
                     factoryClass="dev.akeen.worktreetasks.ui.ReviewToolWindowFactory"/>
 
+        <toolWindow id="Task Browser"
+                    anchor="right"
+                    icon="AllIcons.Toolwindows.WebToolWindow"
+                    doNotActivateOnStart="true"
+                    factoryClass="dev.akeen.worktreetasks.ui.BrowserToolWindowFactory"/>
+
         <postStartupActivity implementation="dev.akeen.worktreetasks.startup.WorktreeOpenActivity"/>
 
         <notificationGroup id="Worktree Tasks" displayType="BALLOON"/>

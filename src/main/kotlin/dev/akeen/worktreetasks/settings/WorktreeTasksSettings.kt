@@ -52,6 +52,9 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
     /** How often to check GitHub for PRs to review, in minutes. 0 = off. */
     var prPollMinutes: Int = 5
 
+    /** Page the Task Browser tool window shows: the dev server every task's stack serves on. */
+    var browserUrl: String = "http://localhost:3000"
+
     /**
      * Dev-server commands for a task's stack, one shell command per line (`#` lines are comments).
      * Each runs through a login shell in the worktree directory. Active-only: only the active task's
