@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
  * Reviews teammates' PRs one at a time: checks the PR out into its own worktree (parent = the PR's base,
  * so Task Review shows exactly the PR), then runs `claude -p` there with `review/pr-review-prompt.md`.
  * That session is read-only: it may read code, run read-only git/gh, read Jira, and use the
- * code-review / review-tour skills, and the only file it can write is the review tour. Nothing is
+ * code-review / review-tour skills; it writes nothing and replies with the tour, which is saved here. Nothing is
  * posted anywhere. When it finishes the user is notified and Task Review opens on the PR.
  */
 @Service(Service.Level.APP)
@@ -30,15 +30,16 @@ class PrReviewRunner : Disposable {
 
     private val queue = AppExecutorUtil.createBoundedApplicationPoolExecutor("Worktree Tasks PR reviews", 1)
 
-    fun enqueue(record: PrReviewStore.Record) {
+    /** Queue [record] for review; unless [force], a head commit that already has a tour is just marked ready. */
+    fun enqueue(record: PrReviewStore.Record, force: Boolean = false) {
         PrReviewStore.getInstance().update(record) { status = PrReviewStatus.QUEUED.name }
         refreshSidebars()
-        queue.execute { review(record) }
+        queue.execute { review(record, force) }
     }
 
     override fun dispose() {}
 
-    private fun review(record: PrReviewStore.Record) {
+    private fun review(record: PrReviewStore.Record, force: Boolean) {
         val store = PrReviewStore.getInstance()
         store.update(record) { status = PrReviewStatus.REVIEWING.name }
         refreshSidebars()
@@ -50,18 +51,26 @@ class PrReviewRunner : Disposable {
         }
         if (worktree == null) return failed(record, null, "couldn't check it out")
 
+        val head = WorktreeGit.revParse(worktree, "HEAD").orEmpty()
+        if (!force && head.isNotEmpty() && alreadyReviewed(worktree, head)) {
+            store.update(record) { status = PrReviewStatus.READY.name; reviewedSha = head }
+            refreshSidebars()
+            return
+        }
+
         val exit = try {
             runClaude(record, worktree)
         } catch (t: Throwable) {
             LOG.warn("Review of PR #${record.number} failed to run", t)
             -1
         }
-        val tour = ReviewTours.read(worktree)
-        if (exit != 0 || tour == null) return failed(record, worktree, if (exit != 0) "claude exited $exit" else "no review tour was written")
+        val tour = if (exit == 0) saveTour(worktree) else null
+        if (tour == null) return failed(record, worktree, if (exit != 0) "claude exited $exit" else "its reply wasn't a review tour")
 
+        Files.writeString(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE), head)
         store.update(record) {
             status = PrReviewStatus.READY.name
-            reviewedSha = WorktreeGit.revParse(worktree, "HEAD").orEmpty()
+            reviewedSha = head
         }
         Files.writeString(worktree.resolve(ReviewTours.READY_MARKER), record.number.toString())
         refreshSidebars()
@@ -114,10 +123,30 @@ class PrReviewRunner : Disposable {
         return worktree
     }
 
+    private fun alreadyReviewed(worktree: Path, head: String): Boolean = try {
+        val sha = worktree.resolve(ReviewTours.REVIEWED_SHA_FILE)
+        Files.isRegularFile(sha) && Files.readString(sha).trim() == head && ReviewTours.read(worktree) != null
+    } catch (_: Throwable) {
+        false
+    }
+
+    /** The session replies with the tour as JSON (it can't write files); save it where Task Review reads it. */
+    private fun saveTour(worktree: Path): ReviewTour? {
+        val envelope = runCatching {
+            com.google.gson.JsonParser.parseString(Files.readString(worktree.resolve(RESULT_FILE))).asJsonObject
+        }.getOrNull() ?: return null
+        val reply = envelope.get("result")?.takeIf { it.isJsonPrimitive }?.asString ?: return null
+        val json = ReviewTours.extractJsonObject(reply) ?: return null
+        val tour = ReviewTours.parse(json)?.takeIf { it.steps.isNotEmpty() } ?: return null
+        Files.writeString(worktree.resolve(ReviewTours.TOUR_FILE), json)
+        return tour
+    }
+
     private fun runClaude(record: PrReviewStore.Record, worktree: Path): Int {
         val claudeDir = Files.createDirectories(worktree.resolve(".claude"))
         Files.deleteIfExists(worktree.resolve(ReviewTours.TOUR_FILE))
         Files.deleteIfExists(worktree.resolve(ReviewTours.READY_MARKER))
+        Files.deleteIfExists(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE))
         val prompt = prompt(record)
         Files.writeString(claudeDir.resolve("review-prompt.md"), prompt)
 
@@ -127,13 +156,13 @@ class PrReviewRunner : Disposable {
             claude, "-p", prompt,
             "--permission-mode", "dontAsk",
             "--max-turns", "250",
-            "--output-format", "text",
+            "--output-format", "json",
             "--allowedTools",
         ) + ALLOWED_TOOLS
         val process = ProcessBuilder(command)
             .directory(worktree.toFile())
-            .redirectErrorStream(true)
-            .redirectOutput(worktree.resolve(LOG_FILE).toFile())
+            .redirectOutput(worktree.resolve(RESULT_FILE).toFile())
+            .redirectError(worktree.resolve(LOG_FILE).toFile())
             .redirectInput(ProcessBuilder.Redirect.from(File("/dev/null")))
             .apply {
                 environment().clear()
@@ -207,6 +236,7 @@ class PrReviewRunner : Disposable {
 
     companion object {
         const val LOG_FILE = ".claude/review-run.log"
+        private const val RESULT_FILE = ".claude/review-result.json"
         private const val TIMEOUT_MINUTES = 45L
         private val LOG = Logger.getInstance(PrReviewRunner::class.java)
 
@@ -219,7 +249,6 @@ class PrReviewRunner : Disposable {
             "mcp__claude_ai_Atlassian_MCP__getAccessibleAtlassianResources",
             "mcp__claude_ai_Atlassian_MCP__getJiraIssue",
             "mcp__claude_ai_Atlassian_MCP__searchJiraIssuesUsingJql",
-            "Edit(.claude/review-tour.json)",
         )
 
         fun getInstance(): PrReviewRunner = ApplicationManager.getApplication().getService(PrReviewRunner::class.java)

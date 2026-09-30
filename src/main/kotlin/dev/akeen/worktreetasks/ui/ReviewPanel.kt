@@ -108,6 +108,7 @@ class ReviewPanel(
             append("<p>No review tour for this branch; files are listed outside-in, specs last.</p>")
             return@html
         }
+        tour.take?.let { append("<p>${esc(it)}</p>") }
         bullets(if (tour.sections.isEmpty()) null else "Flow", tour.summary)
         tour.sections.forEach { bullets(it.title, it.bullets) }
     }

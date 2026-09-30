@@ -389,7 +389,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
         override fun actionPerformed(e: AnActionEvent) {
             val task = selectedTask() ?: return
-            PrReviewStore.getInstance().forWorktree(task.path)?.let { PrReviewRunner.getInstance().enqueue(it) }
+            PrReviewStore.getInstance().forWorktree(task.path)?.let { PrReviewRunner.getInstance().enqueue(it, force = true) }
         }
     }
 

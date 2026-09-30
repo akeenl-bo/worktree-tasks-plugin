@@ -53,4 +53,21 @@ class ReviewToursTest {
             steps[1],
         )
     }
+
+    @Test
+    fun `reads a PR review tour out of the reviewer's reply, fenced or not`() {
+        val reply = "```json\n" + """
+            {"title": "PR #31021", "take": "Fills in the deal from documents.",
+             "summary": ["When a broker creates a deal..."],
+             "sections": [{"title": "Jira", "bullets": ["No acceptance criteria."]}],
+             "findings": [{"file": "app/models/ai/actions/create_deal.rb", "line": 137, "severity": "medium", "text": "Otto isn't wired."}],
+             "steps": [{"file": "app/models/ai/actions/create_deal.rb", "line": 120, "label": "CreateDeal#call"}]}
+        """.trimIndent() + "\n```"
+
+        val tour = ReviewTours.parse(ReviewTours.extractJsonObject(reply)!!)!!
+
+        assertEquals("Fills in the deal from documents.", tour.take)
+        assertEquals(listOf("Jira"), tour.sections.map { it.title })
+        assertEquals(mapOf(0 to tour.findings), ReviewTours.findingsByStep(tour.findings, tour.steps))
+    }
 }

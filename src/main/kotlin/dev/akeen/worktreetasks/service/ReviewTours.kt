@@ -36,6 +36,8 @@ data class ReviewTour(
     val steps: List<ReviewStep>,
     val sections: List<ReviewSection> = emptyList(),
     val findings: List<ReviewFinding> = emptyList(),
+    /** The reviewer's overall take on a PR, shown above the flow. */
+    val take: String? = null,
 )
 
 /**
@@ -51,6 +53,9 @@ object ReviewTours {
 
     /** Left by a finished PR review until it's opened, so its window opens straight onto Task Review. */
     const val READY_MARKER = ".claude/review-ready"
+
+    /** The head commit a PR's tour was written for, so the same commit is never reviewed twice. */
+    const val REVIEWED_SHA_FILE = ".claude/review-sha"
 
     /** Steps closer than this in the same file are one screen, so one step. */
     private const val SAME_SCREEN_LINES = 15
@@ -101,7 +106,14 @@ object ReviewTours {
                 text = finding.text("text") ?: return@mapNotNull null,
             )
         }.orEmpty()
-        return ReviewTour(root.text("title"), root.getAsJsonArray("summary").strings(), steps, sections, findings)
+        return ReviewTour(root.text("title"), root.getAsJsonArray("summary").strings(), steps, sections, findings, root.text("take"))
+    }
+
+    /** The JSON object in a model's reply, which may be wrapped in a code fence or stray prose. */
+    internal fun extractJsonObject(reply: String): String? {
+        val start = reply.indexOf('{')
+        val end = reply.lastIndexOf('}')
+        return if (start >= 0 && end > start) reply.substring(start, end + 1) else null
     }
 
     private fun JsonObject.text(key: String): String? =
