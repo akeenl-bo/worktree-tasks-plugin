@@ -39,8 +39,9 @@ class WeekPlanTest {
     fun `plans in-flight work first, then today's share of the gap, then the rest of the week`() {
         val stats = weekStats(
             listOf(
-                history("PROJ-1", "Merged", "indeterminate", 4.0, "2026-09-28T12:00" to "Merged"),
+                history("PROJ-1", "Merged", "indeterminate", 3.0, "2026-09-28T12:00" to "Merged"),
                 history("PROJ-3", "Code Review", "indeterminate", 2.0, "2026-09-29T09:00" to "Code Review"),
+                history("PROJ-4", "In Progress", "indeterminate", 1.0, "2026-09-30T09:00" to "In Progress"),
             ),
             groups,
             now,
@@ -51,26 +52,31 @@ class WeekPlanTest {
 
         assertEquals(6.0, plan.left, 0.0)
         assertEquals(2.0, plan.perDay, 0.0)
-        assertEquals(listOf("PROJ-3"), plan.finish.map { it.key })
+        assertEquals(listOf("PROJ-3"), plan.review.map { it.key })
+        assertEquals(listOf("PROJ-4"), plan.finish.map { it.key })
         assertEquals(listOf("PROJ-10"), plan.today.map { it.key })
         assertEquals(listOf("PROJ-12", "PROJ-13"), plan.rest.map { it.key })
         assertEquals(listOf("PROJ-11"), plan.unpointed.map { it.key })
     }
 
     @Test
-    fun `reads status moves from a changelog search`() {
-        val histories = parseHistories(
+    fun `reads status moves from a ticket's changelog page`() {
+        val page = parseChangelogPage(
             """
-            {"issues": [{"key": "PROJ-1", "fields": {"summary": "S", "status": {"id": "10642", "name": "Merged", "statusCategory": {"key": "indeterminate"}}},
-              "changelog": {"histories": [
-                {"created": "2026-09-28T16:27:04.193-0500", "items": [{"field": "status", "fromString": "Code Review", "toString": "Merged"}]},
-                {"created": "2026-09-28T16:30:00.000-0500", "items": [{"field": "assignee", "toString": "Sam"}]}
-              ]}}]}
+            {"startAt": 0, "maxResults": 100, "total": 3, "isLast": true, "values": [
+              {"created": "2026-09-28T11:38:49.092-0500", "items": [{"field": "assignee", "toString": "Sam"}]},
+              {"created": "2026-09-28T16:27:04.193-0500", "items": [{"field": "status", "fromString": "Code Review", "toString": "Merged"}]},
+              {"created": "2026-09-29T22:43:01.399-0500", "items": [{"field": "status", "fromString": "Merged", "toString": "Ready for QA"}]}
+            ]}
             """.trimIndent(),
-            pointsField = null,
         )
 
-        assertEquals(listOf(StatusChange(Instant.parse("2026-09-28T21:27:04.193Z"), "Merged")), histories.single().changes)
+        assertEquals(
+            listOf(StatusChange(Instant.parse("2026-09-28T21:27:04.193Z"), "Merged"), StatusChange(Instant.parse("2026-09-30T03:43:01.399Z"), "Ready for QA")),
+            page.changes,
+        )
+        assertEquals(3, page.size)
+        assertEquals(true, page.isLast)
     }
 
     @Test

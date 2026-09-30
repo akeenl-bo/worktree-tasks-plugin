@@ -54,8 +54,8 @@ private fun JsonObject.arr(name: String): JsonArray? = get(name)?.takeIf { it.is
 private fun JsonObject.str(name: String): String? = get(name)?.takeIf { it.isJsonPrimitive }?.asString
 private fun JsonArray.objects(): List<JsonObject> = mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject }
 
-/** Issues from a `search/jql` or agile board page; [pointsField] is the site's Story Points field id. */
-internal fun parseIssues(json: String, pointsField: String?): List<JiraIssue> {
+/** Issues from a `search/jql` or agile board page; points come from the first of [pointsFields] that has a value. */
+internal fun parseIssues(json: String, pointsFields: List<String>): List<JiraIssue> {
     val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
     return root.arr("issues")?.objects().orEmpty().mapNotNull { issue ->
         val key = issue.str("key") ?: return@mapNotNull null
@@ -71,7 +71,7 @@ internal fun parseIssues(json: String, pointsField: String?): List<JiraIssue> {
             typeName = fields.obj("issuetype")?.str("name").orEmpty(),
             assigneeName = assignee?.str("displayName"),
             assigneeAccountId = assignee?.str("accountId"),
-            points = pointsField?.let { fields.get(it) }?.takeIf { it.isJsonPrimitive }?.asDouble,
+            points = pointsFields.firstNotNullOfOrNull { id -> fields.get(id)?.takeIf { it.isJsonPrimitive }?.asDouble },
             parentKey = fields.obj("parent")?.str("key"),
         )
     }
@@ -92,21 +92,23 @@ internal fun parseRenderedDescriptions(json: String): Map<String, String> {
 
 private val jiraTimestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
 
-/** Issues with their status moves, from a search with `expand=changelog`. */
-internal fun parseHistories(json: String, pointsField: String?): List<TicketHistory> {
-    val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
-    val issues = parseIssues(json, pointsField).associateBy { it.key }
-    return root.arr("issues")?.objects().orEmpty().mapNotNull { raw ->
-        val issue = raw.str("key")?.let { issues[it] } ?: return@mapNotNull null
-        val changes = raw.obj("changelog")?.arr("histories")?.objects().orEmpty().flatMap { history ->
-            val at = history.str("created")?.let { runCatching { OffsetDateTime.parse(it, jiraTimestamp).toInstant() }.getOrNull() }
-                ?: return@flatMap emptyList()
-            history.arr("items")?.objects().orEmpty()
-                .filter { it.str("field") == "status" }
-                .mapNotNull { item -> item.str("toString")?.let { StatusChange(at, it) } }
-        }
-        TicketHistory(issue, changes)
+/** One page of `issue/{key}/changelog` (oldest first): its status moves, how many entries it held, and whether it's the last. */
+internal data class ChangelogPage(val changes: List<StatusChange>, val size: Int, val isLast: Boolean)
+
+internal fun parseChangelogPage(json: String): ChangelogPage {
+    val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return ChangelogPage(emptyList(), 0, true)
+    val changes = root.arr("values")?.objects().orEmpty().flatMap { history ->
+        val at = history.str("created")?.let { runCatching { OffsetDateTime.parse(it, jiraTimestamp).toInstant() }.getOrNull() }
+            ?: return@flatMap emptyList()
+        history.arr("items")?.objects().orEmpty()
+            .filter { it.str("field") == "status" }
+            .mapNotNull { item -> item.str("toString")?.let { StatusChange(at, it) } }
     }
+    val total = root.get("total")?.takeIf { it.isJsonPrimitive }?.asInt
+    val startAt = root.get("startAt")?.takeIf { it.isJsonPrimitive }?.asInt ?: 0
+    val count = root.arr("values")?.size() ?: 0
+    val last = root.get("isLast")?.takeIf { it.isJsonPrimitive }?.asBoolean ?: (total == null || startAt + count >= total || count == 0)
+    return ChangelogPage(changes, count, last)
 }
 
 /** Jira's rendered HTML as plain text, for handing descriptions to Claude. */
@@ -119,10 +121,10 @@ internal fun htmlToText(html: String): String =
 
 internal data class IssuePage(val issues: List<JiraIssue>, val nextPageToken: String?, val isLast: Boolean)
 
-internal fun parseSearchPage(json: String, pointsField: String?): IssuePage {
+internal fun parseSearchPage(json: String, pointsFields: List<String>): IssuePage {
     val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject
     val token = root?.str("nextPageToken")
-    return IssuePage(parseIssues(json, pointsField), token, root?.get("isLast")?.asBoolean ?: (token == null))
+    return IssuePage(parseIssues(json, pointsFields), token, root?.get("isLast")?.asBoolean ?: (token == null))
 }
 
 internal fun parseBoardColumns(json: String): List<BoardColumn> {

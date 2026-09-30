@@ -43,13 +43,15 @@ data class WeekStats(
 }
 
 /**
- * What to do with the rest of the week: finish what's in flight, then [today]'s picks, then [rest],
- * sized so delivered + in flight + picks reach the goal ([left] is the gap still to pick up).
+ * What to do with the rest of the week: [review] waits on reviewers, [finish] is work in progress,
+ * then [today]'s picks and [rest], sized so delivered + in flight + picks reach the goal ([left] is
+ * the gap still to pick up).
  */
 data class WeekPlan(
     val goal: Double,
     val left: Double,
     val perDay: Double,
+    val review: List<JiraIssue>,
     val finish: List<JiraIssue>,
     val today: List<JiraIssue>,
     val rest: List<JiraIssue>,
@@ -91,8 +93,8 @@ internal fun weekStats(histories: List<TicketHistory>, groups: StatusGroups, now
 
 /**
  * Plans the rest of the week from [pool] (already in the order to take them): in-flight work first,
- * review before in progress, then new tickets until today's even share of the gap is covered, then
- * the rest of the gap. Never changes anything; it only orders what's there.
+ * then new tickets until today's even share of the gap is covered, then the rest of the gap. Never
+ * changes anything; it only orders what's there.
  */
 internal fun planWeek(stats: WeekStats, goal: Double, pool: List<JiraIssue>): WeekPlan {
     val left = (goal - stats.deliveredPoints - stats.inFlightPoints).coerceAtLeast(0.0)
@@ -101,7 +103,7 @@ internal fun planWeek(stats: WeekStats, goal: Double, pool: List<JiraIssue>): We
 
     val today = if (stats.workdaysLeft > 0) takeUntil(pointed, perDay) else emptyList()
     val rest = takeUntil(pointed.drop(today.size), left - today.sumOf { it.points ?: 0.0 })
-    return WeekPlan(goal, left, perDay, stats.inReview + stats.inProgress, today, rest, unpointed)
+    return WeekPlan(goal, left, perDay, stats.inReview, stats.inProgress, today, rest, unpointed)
 }
 
 /** Leading tickets whose points first reach [target] (the last one may go over). */
@@ -155,7 +157,9 @@ internal fun picksPrompt(stats: WeekStats, plan: WeekPlan, candidates: List<Jira
         appendLine()
         appendLine("Delivered this week:")
         stats.delivered.ifEmpty { null }?.forEach { appendLine(line(it.first)) } ?: appendLine("- nothing yet")
-        appendLine("In flight (they'll finish these first):")
+        appendLine("In code review (waiting on reviewers):")
+        plan.review.ifEmpty { null }?.forEach { appendLine(line(it)) } ?: appendLine("- nothing")
+        appendLine("In progress (they'll finish these before picking anything new):")
         plan.finish.ifEmpty { null }?.forEach { appendLine(line(it)) } ?: appendLine("- nothing")
         appendLine()
         appendLine("Candidates: theirs first, then unassigned, each group in board rank order (the team's priority):")

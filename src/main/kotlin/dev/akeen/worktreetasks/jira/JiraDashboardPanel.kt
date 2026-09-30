@@ -178,7 +178,7 @@ class JiraDashboardPanel(private val project: Project, private val toolWindow: T
     private fun load(): DashData {
         val config = JiraConfig.load()
         if (config.siteUrl.isEmpty()) throw NotConfigured("Set \"site\" in ${JiraConfig.path()} to your Jira Cloud URL.", inSettings = false)
-        val client = JiraClient.forSite(config.siteUrl) ?: throw NotConfigured("Add your Jira email and API token to see the dashboard.", inSettings = true)
+        val client = JiraClient.forSite(config.siteUrl, config.pointsField) ?: throw NotConfigured("Add your Jira email and API token to see the dashboard.", inSettings = true)
         val dashboard = config.dashboard
         val groups = StatusGroups(dashboard.deliveredStatuses.ifEmpty { client.doneStatusNames() }, dashboard.reviewStatuses)
 
@@ -260,15 +260,18 @@ class JiraDashboardPanel(private val project: Project, private val toolWindow: T
             }, 12)
         }
 
+        add(sectionHeader("In code review", "${formatPoints(plan.review.sumOf { it.points ?: 0.0 })} waiting on reviewers"), 14)
+        add(rowList(plan.review.map { Row(it) }, "Nothing in review."))
+
         val finish = plan.finish.map { Row(it, "Finish") }
         val todayPicks = claudeToday ?: plan.today.map { Row(it, "Pick up") }
         val todayNote = when {
             stats.workdaysLeft == 0 -> "weekend, nothing planned"
-            plan.left <= 0.0 -> "goal covered; finish what's in flight"
+            plan.left <= 0.0 -> "goal covered; finish what's in progress"
             else -> "about ${formatPoints(plan.perDay)} to pick up"
         }
         add(sectionHeader("Today", todayNote), 14)
-        add(rowList(finish + todayPicks, "Nothing in flight or to pick up today."))
+        add(rowList(finish + todayPicks, "Nothing in progress or to pick up today."))
 
         val restPicks = claudeRest ?: plan.rest.map { Row(it) }
         val restNote = if (stats.workdaysLeft <= 1) "last workday of the week" else "${stats.workdaysLeft - 1} more workday${if (stats.workdaysLeft - 1 == 1) "" else "s"}"

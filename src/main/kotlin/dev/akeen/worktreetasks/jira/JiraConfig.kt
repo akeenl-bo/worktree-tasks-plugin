@@ -21,6 +21,8 @@ class JiraConfig {
     var fieldDefaults: MutableMap<String, String> = mutableMapOf()
     var views: MutableList<JiraView> = mutableListOf()
     var dashboard: DashboardConfig = DashboardConfig()
+    /** Story-point field id, e.g. `customfield_10016`. Blank = every field named "Story Points" or "Story point estimate". */
+    var pointsField: String = ""
 
     val siteUrl: String get() = site.trim().trimEnd('/')
 

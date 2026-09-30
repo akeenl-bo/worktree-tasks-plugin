@@ -14,6 +14,8 @@ import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.time.Duration
 import java.util.Base64
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.Executors
 
 class JiraException(message: String, val status: Int = 0) : RuntimeException(message)
 
@@ -41,7 +43,7 @@ object JiraCredentials {
  * them off the EDT. Board reads use the agile API; searches use `search/jql` (the old `search`
  * endpoint is gone from Jira Cloud).
  */
-class JiraClient private constructor(private val site: String, private val auth: String) {
+class JiraClient private constructor(private val site: String, private val auth: String, private val pointsOverride: String = "") {
 
     fun myAccountId(): String =
         parseJson(get("/rest/api/3/myself"))?.asJsonObject?.get("accountId")?.asString
@@ -50,7 +52,7 @@ class JiraClient private constructor(private val site: String, private val auth:
     fun boardColumns(boardId: Int): List<BoardColumn> = parseBoardColumns(get("/rest/agile/1.0/board/$boardId/configuration"))
 
     fun boardIssues(boardId: Int, jql: String): List<JiraIssue> {
-        val points = pointsField()
+        val points = pointsFields()
         val issues = mutableListOf<JiraIssue>()
         var startAt = 0
         while (issues.size < MAX_ISSUES) {
@@ -71,14 +73,38 @@ class JiraClient private constructor(private val site: String, private val auth:
     }
 
     fun search(jql: String): List<JiraIssue> {
-        val points = pointsField()
+        val points = pointsFields()
         return searchPages(jql, issueFields(points).split(","), null).flatMap { parseIssues(it, points) }
     }
 
-    /** Issues matching [jql] with their status moves (changelog), for weekly delivery stats. */
+    /**
+     * Issues matching [jql] with every status move each one made, for weekly delivery stats. Each
+     * ticket's full changelog comes from its own endpoint (search results don't carry it reliably),
+     * a few tickets at a time.
+     */
     fun histories(jql: String): List<TicketHistory> {
-        val points = pointsField()
-        return searchPages(jql, issueFields(points).split(","), "changelog").flatMap { parseHistories(it, points) }
+        val issues = search(jql)
+        if (issues.isEmpty()) return emptyList()
+        val pool = Executors.newFixedThreadPool(minOf(CHANGELOG_THREADS, issues.size))
+        try {
+            return issues.map { issue -> pool.submit<TicketHistory> { TicketHistory(issue, statusChanges(issue.key)) } }
+                .map { it.get() }
+        } catch (e: ExecutionException) {
+            throw e.cause as? JiraException ?: JiraException(e.cause?.message ?: e.toString())
+        } finally {
+            pool.shutdownNow()
+        }
+    }
+
+    private fun statusChanges(key: String): List<StatusChange> {
+        val changes = mutableListOf<StatusChange>()
+        var startAt = 0
+        while (true) {
+            val page = parseChangelogPage(get("/rest/api/3/issue/${encode(key)}/changelog?startAt=$startAt&maxResults=100"))
+            changes += page.changes
+            if (page.isLast || page.size == 0) return changes
+            startAt += page.size
+        }
     }
 
     /** Rendered description HTML for each of [keys], in one search. */
@@ -111,7 +137,7 @@ class JiraClient private constructor(private val site: String, private val auth:
                 token?.let { addProperty("nextPageToken", it) }
             }
             val json = post("/rest/api/3/search/jql", body)
-            val page = parseSearchPage(json, null)
+            val page = parseSearchPage(json, emptyList())
             pages += json
             count += page.issues.size
             token = page.nextPageToken
@@ -121,7 +147,7 @@ class JiraClient private constructor(private val site: String, private val auth:
     }
 
     fun issue(key: String): JiraIssue? {
-        val points = pointsField()
+        val points = pointsFields()
         val json = get("/rest/api/3/issue/${encode(key)}?fields=${encode(issueFields(points))}")
         return parseIssues("{\"issues\":[$json]}", points).firstOrNull()
     }
@@ -155,14 +181,23 @@ class JiraClient private constructor(private val site: String, private val auth:
 
     fun browseUrl(key: String): String = "$site/browse/$key"
 
-    /** The site's Story Points field id (custom field ids differ per site), looked up once per site. */
-    private fun pointsField(): String? = pointsFields.getOrPut(site) {
-        val fields = parseJson(get("/rest/api/3/field"))?.takeIf { it.isJsonArray }?.asJsonArray
-        fields?.firstOrNull { it.asJsonObject.get("name")?.asString == "Story Points" }?.asJsonObject?.get("id")?.asString.orEmpty()
-    }.ifEmpty { null }
+    /**
+     * The story-point field ids to read (custom field ids differ per site): the config's `pointsField`
+     * if set, else every field named like story points, since a site can have several with the same
+     * name and only one holds a given project's values. Looked up once per site.
+     */
+    private fun pointsFields(): List<String> {
+        if (pointsOverride.isNotBlank()) return listOf(pointsOverride.trim())
+        return pointsFieldsBySite.getOrPut(site) {
+            val fields = parseJson(get("/rest/api/3/field"))?.takeIf { it.isJsonArray }?.asJsonArray ?: return@getOrPut emptyList()
+            fields.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject }
+                .filter { it.get("name")?.asString?.trim()?.lowercase() in POINTS_FIELD_NAMES }
+                .mapNotNull { it.get("id")?.asString }
+        }
+    }
 
-    private fun issueFields(points: String?) =
-        listOfNotNull("summary", "status", "issuetype", "assignee", "parent", points).joinToString(",")
+    private fun issueFields(points: List<String>) =
+        (listOf("summary", "status", "issuetype", "assignee", "parent") + points).joinToString(",")
 
     private fun get(path: String): String = send("GET", path, null)
 
@@ -195,16 +230,21 @@ class JiraClient private constructor(private val site: String, private val auth:
 
     companion object {
         private const val MAX_ISSUES = 500
+        private const val CHANGELOG_THREADS = 6
         private val http: HttpClient = HttpClient.newBuilder().connectTimeout(Duration.ofSeconds(15)).build()
-        private val pointsFields = java.util.concurrent.ConcurrentHashMap<String, String>()
+        private val POINTS_FIELD_NAMES = setOf("story points", "story point estimate")
+        private val pointsFieldsBySite = java.util.concurrent.ConcurrentHashMap<String, List<String>>()
 
-        /** A client for [site], or null when the email or token isn't set yet. Reads the keychain, so not on the EDT. */
-        fun forSite(site: String): JiraClient? {
+        /**
+         * A client for [site], or null when the email or token isn't set yet. [pointsField] pins the
+         * story-point field id (the config's `pointsField`). Reads the keychain, so not on the EDT.
+         */
+        fun forSite(site: String, pointsField: String = ""): JiraClient? {
             val email = WorktreeTasksSettings.getInstance().jiraEmail.trim()
             val token = JiraCredentials.read()
             if (site.isEmpty() || email.isEmpty() || token.isEmpty()) return null
             val auth = "Basic " + Base64.getEncoder().encodeToString("$email:$token".toByteArray())
-            return JiraClient(site, auth)
+            return JiraClient(site, auth, pointsField)
         }
 
         private fun encode(value: String): String = URLEncoder.encode(value, Charsets.UTF_8).replace("+", "%20")

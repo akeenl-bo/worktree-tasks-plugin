@@ -26,7 +26,8 @@ class JiraModelsTest {
                 "issuetype": {"name": "Story"}, "assignee": null, "parent": {"key": "PROJ-1"}}}
             ]}
             """.trimIndent(),
-            pointsField = "customfield_10117",
+            // Two fields named "Story Points": the first is empty for this project, the second holds the value.
+            pointsFields = listOf("customfield_10026", "customfield_10117"),
         )
 
         val board = groupByColumn(columns, issues)

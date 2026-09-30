@@ -238,7 +238,7 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
 
     private fun load(view: JiraView): BoardData {
         if (config.siteUrl.isEmpty()) throw NoSite()
-        val client = JiraClient.forSite(config.siteUrl) ?: throw NotConfigured()
+        val client = JiraClient.forSite(config.siteUrl, config.pointsField) ?: throw NotConfigured()
         val me = myAccountId ?: client.myAccountId().also { myAccountId = it }
         val columns = if (view.boardId > 0) {
             groupByColumn(client.boardColumns(view.boardId), client.boardIssues(view.boardId, view.jql.trim()))

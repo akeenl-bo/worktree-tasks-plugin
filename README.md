@@ -85,7 +85,9 @@ views without one run `jql` alone, grouped by status. `repoPath` is where Start 
 }
 ```
 
-Your email and API token go in Settings; the token is kept in the macOS Keychain.
+Your email and API token go in Settings; the token is kept in the macOS Keychain. Points are read
+from every field named "Story Points" or "Story point estimate"; if your site has several and the
+wrong one wins, pin it with `"pointsField": "customfield_10016"` (the id from the field's admin URL).
 
 **Dashboard tab.** This week (Monday to Friday) against a weekly point goal set at the top of the tab
 (blank or 0 = your last four weeks' average). A ticket is credited to the week it *first* entered a
