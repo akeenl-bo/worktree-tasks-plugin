@@ -20,8 +20,23 @@ data class ReviewStep(
     val now: String? = null,
 )
 
-/** [summary] is the whole flow as bullets ("When the user clicks X, ..."). */
-data class ReviewTour(val title: String?, val summary: List<String>, val steps: List<ReviewStep>)
+/** A titled group of bullets on the overview, e.g. Jira, Manual test, Findings. */
+data class ReviewSection(val title: String, val bullets: List<String>)
+
+/** A verified code-review finding at [file]:[line]. */
+data class ReviewFinding(val file: String, val line: Int?, val severity: String?, val text: String)
+
+/**
+ * [summary] is the whole flow as bullets ("When the user clicks X, ..."). PR reviews add [sections]
+ * (Jira context, manual test notes, findings) and [findings], which also show on the step they fall in.
+ */
+data class ReviewTour(
+    val title: String?,
+    val summary: List<String>,
+    val steps: List<ReviewStep>,
+    val sections: List<ReviewSection> = emptyList(),
+    val findings: List<ReviewFinding> = emptyList(),
+)
 
 /**
  * Review tours are written by Claude into the worktree's gitignored `.claude/review-tour.json`:
@@ -33,6 +48,9 @@ object ReviewTours {
 
     const val TOUR_FILE = ".claude/review-tour.json"
     const val COMMENTS_FILE = ".claude/review-comments.md"
+
+    /** Left by a finished PR review until it's opened, so its window opens straight onto Task Review. */
+    const val READY_MARKER = ".claude/review-ready"
 
     /** Steps closer than this in the same file are one screen, so one step. */
     private const val SAME_SCREEN_LINES = 15
@@ -69,14 +87,40 @@ object ReviewTours {
                 now = step.text("now"),
             )
         }.orEmpty()
-        val summary = root.getAsJsonArray("summary")
-            ?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString?.trim()?.takeIf { s -> s.isNotEmpty() } }
-            .orEmpty()
-        return ReviewTour(root.text("title"), summary, steps)
+        val sections = root.getAsJsonArray("sections")?.mapNotNull { element ->
+            val section = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+            val title = section.text("title") ?: return@mapNotNull null
+            ReviewSection(title, section.getAsJsonArray("bullets").strings())
+        }.orEmpty()
+        val findings = root.getAsJsonArray("findings")?.mapNotNull { element ->
+            val finding = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+            ReviewFinding(
+                file = finding.text("file")?.removePrefix("./") ?: return@mapNotNull null,
+                line = finding.text("line")?.toIntOrNull(),
+                severity = finding.text("severity"),
+                text = finding.text("text") ?: return@mapNotNull null,
+            )
+        }.orEmpty()
+        return ReviewTour(root.text("title"), root.getAsJsonArray("summary").strings(), steps, sections, findings)
     }
 
     private fun JsonObject.text(key: String): String? =
         get(key)?.takeIf { it.isJsonPrimitive }?.asString?.trim()?.takeIf { it.isNotEmpty() }
+
+    private fun com.google.gson.JsonArray?.strings(): List<String> =
+        this?.mapNotNull { it.takeIf { e -> e.isJsonPrimitive }?.asString?.trim()?.takeIf { s -> s.isNotEmpty() } }.orEmpty()
+
+    /**
+     * Which step each finding belongs to: the last step in the finding's file at or above its line
+     * (so it lands in the function it's in), else that file's first step. Findings in files the tour
+     * never visits stay overview-only.
+     */
+    fun findingsByStep(findings: List<ReviewFinding>, steps: List<ReviewStep>): Map<Int, List<ReviewFinding>> =
+        findings.mapNotNull { finding ->
+            val inFile = steps.withIndex().filter { it.value.file == finding.file }
+            val index = inFile.lastOrNull { (it.value.line ?: 0) <= (finding.line ?: 0) }?.index ?: inFile.firstOrNull()?.index
+            index?.let { it to finding }
+        }.groupBy({ it.first }, { it.second })
 
     /**
      * The tour's steps first, in its order (steps on unchanged files stay, as context, when the file

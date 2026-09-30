@@ -46,6 +46,12 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
      */
     var notificationSound: String = "Pop"
 
+    /** Teammates' PRs with this GitHub label get reviewed automatically (as do ones assigned to you or awaiting your review). */
+    var prReviewLabel: String = "Team AI"
+
+    /** How often to check GitHub for PRs to review, in minutes. 0 = off. */
+    var prPollMinutes: Int = 5
+
     /**
      * Dev-server commands for a task's stack, one shell command per line (`#` lines are comments).
      * Each runs through a login shell in the worktree directory. Active-only: only the active task's

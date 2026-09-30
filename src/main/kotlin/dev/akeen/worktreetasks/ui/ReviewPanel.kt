@@ -23,6 +23,7 @@ import com.intellij.util.ui.JBUI
 import dev.akeen.worktreetasks.service.ReviewStep
 import dev.akeen.worktreetasks.service.ReviewTour
 import dev.akeen.worktreetasks.service.ReviewTourService
+import dev.akeen.worktreetasks.service.ReviewTours
 import java.awt.BorderLayout
 import java.nio.file.Path
 import javax.swing.JEditorPane
@@ -54,6 +55,7 @@ class ReviewPanel(
     }
     private val counter = JBLabel()
     private val detail = htmlPane()
+    private val findingsByStep = ReviewTours.findingsByStep(tour?.findings.orEmpty(), steps)
     private var current = -1
 
     init {
@@ -102,13 +104,20 @@ class ReviewPanel(
 
     private fun overviewHtml(): String = html {
         append("<b>${esc(title)}</b>")
-        if (tour == null || tour.summary.isEmpty()) {
+        if (tour == null || (tour.summary.isEmpty() && tour.sections.isEmpty())) {
             append("<p>No review tour for this branch; files are listed outside-in, specs last.</p>")
-        } else {
-            append("<ul>")
-            tour.summary.forEach { append("<li>${esc(it)}</li>") }
-            append("</ul>")
+            return@html
         }
+        bullets(if (tour.sections.isEmpty()) null else "Flow", tour.summary)
+        tour.sections.forEach { bullets(it.title, it.bullets) }
+    }
+
+    private fun StringBuilder.bullets(heading: String?, items: List<String>) {
+        if (items.isEmpty()) return
+        heading?.let { append("<p><b>${esc(it)}</b></p>") }
+        append("<ul>")
+        items.forEach { append("<li>${esc(it)}</li>") }
+        append("</ul>")
     }
 
     private fun detailHtml(index: Int): String = html {
@@ -122,6 +131,11 @@ class ReviewPanel(
         step.what?.let { append("<p><b>What happens</b><br>${esc(it)}</p>") }
         step.before?.let { append("<p><b>Before</b><br>${esc(it)}</p>") }
         step.now?.let { append("<p><b>Now</b><br>${esc(it)}</p>") }
+        findingsByStep[index]?.forEach { finding ->
+            val where = finding.line?.let { "line $it" } ?: "this file"
+            val severity = finding.severity?.let { "${esc(it)} · " }.orEmpty()
+            append("<p><b>⚠ Finding</b> ($severity$where)<br>${esc(finding.text)}</p>")
+        }
         steps.getOrNull(index + 1)?.let { append("<p><b>Next →</b> ${esc(it.label ?: it.file)}</p>") }
     }
 
@@ -155,6 +169,7 @@ class ReviewPanel(
             append(step.label ?: step.file.substringAfterLast('/'))
             if (step.label != null) append("  ${step.file.substringAfterLast('/')}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
             if (!changed[value]) append("  context", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+            findingsByStep[value]?.let { append("  ⚠ ${it.size}", SimpleTextAttributes.ERROR_ATTRIBUTES) }
         }
     }
 

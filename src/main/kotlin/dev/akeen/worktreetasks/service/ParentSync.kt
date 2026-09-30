@@ -1,12 +1,9 @@
 package dev.akeen.worktreetasks.service
 
-import com.intellij.execution.configurations.GeneralCommandLine
-import com.intellij.execution.util.ExecUtil
 import com.intellij.notification.NotificationAction
 import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.application.ApplicationManager
-import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.progress.ProgressIndicator
 import com.intellij.openapi.progress.Task
 import com.intellij.openapi.project.Project
@@ -26,7 +23,6 @@ import java.util.concurrent.ConcurrentHashMap
 object ParentSync {
 
     private const val NOTIFICATION_GROUP = "Worktree Tasks"
-    private val LOG = Logger.getInstance(ParentSync::class.java)
 
     /** Worktrees whose parent branch's PR has merged, from the last check. */
     private val mergedParents = ConcurrentHashMap<String, Boolean>()
@@ -183,19 +179,7 @@ object ParentSync {
         gh(workDir, "pr", "list", "--head", branch, "--state", "open", "--json", "number", "--jq", ".[0].number")
             ?.toIntOrNull()
 
-    /** Runs `gh` through a login shell, since an IDE launched from the Dock lacks Homebrew's PATH. */
-    private fun gh(workDir: Path, vararg args: String): String? = try {
-        val command = (listOf("gh") + args).joinToString(" ") { shellQuote(it) }
-        val shell = System.getenv("SHELL")?.takeIf { it.isNotBlank() } ?: "/bin/zsh"
-        val cmd = GeneralCommandLine(shell, "-l", "-c", command)
-            .withWorkDirectory(workDir.toString())
-            .withCharset(Charsets.UTF_8)
-        val out = ExecUtil.execAndGetOutput(cmd, 20_000)
-        out.stdout.trim().takeIf { out.exitCode == 0 }
-    } catch (t: Throwable) {
-        LOG.warn("gh ${args.joinToString(" ")} failed", t)
-        null
-    }
+    private fun gh(workDir: Path, vararg args: String): String? = LoginShell.gh(workDir, *args)
 
     private fun refreshFiles(worktree: Path) {
         LocalFileSystem.getInstance().refreshAndFindFileByNioFile(worktree)?.let {
@@ -227,6 +211,4 @@ object ParentSync {
     private fun refreshSidebars() = ApplicationManager.getApplication().invokeLater { fireTasksChangedEverywhere() }
 
     private fun key(path: Path) = path.normalize().toString()
-
-    private fun shellQuote(s: String): String = "'" + s.replace("'", "'\\''") + "'"
 }

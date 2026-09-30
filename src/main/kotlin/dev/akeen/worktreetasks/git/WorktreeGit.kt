@@ -281,6 +281,23 @@ object WorktreeGit {
     fun configSet(workDir: Path, key: String, value: String): CommandResult =
         run(workDir, "config", key, value)
 
+    fun remoteUrl(workDir: Path, remote: String): String? {
+        val result = run(workDir, "remote", "get-url", remote)
+        return result.output.trim().takeIf { result.success && it.isNotBlank() }
+    }
+
+    /** Move the current branch forward to [ref]; fails if the branch has diverged (e.g. a force-push). */
+    fun fastForward(worktree: Path, ref: String): CommandResult = run(worktree, "merge", "--ff-only", "--quiet", ref)
+
+    /** Point the current branch at [ref], discarding its own commits. Only for review copies without local edits. */
+    fun resetHard(worktree: Path, ref: String): CommandResult = run(worktree, "reset", "--hard", "--quiet", ref)
+
+    /** True when tracked files have uncommitted edits (untracked files like `.idea/` don't count). */
+    fun hasTrackedChanges(worktree: Path): Boolean {
+        val result = run(worktree, "status", "--porcelain", "--untracked-files=no")
+        return result.success && result.output.isNotBlank()
+    }
+
     /**
      * Committed and uncommitted changes since [base], plus untracked files. IDE metadata (`.idea/`,
      * which worktree provisioning seeds and many repos don't ignore) is left out.

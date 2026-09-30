@@ -2,6 +2,7 @@ package dev.akeen.worktreetasks.settings
 
 import com.intellij.openapi.options.BoundConfigurable
 import com.intellij.openapi.ui.DialogPanel
+import com.intellij.ui.dsl.builder.bindIntText
 import com.intellij.ui.dsl.builder.bindSelected
 import com.intellij.ui.dsl.builder.bindText
 import com.intellij.ui.dsl.builder.panel
@@ -42,6 +43,18 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
             textField()
                 .bindText(settings::notificationSound)
                 .comment("Played when a task is done or needs input: a macOS sound such as Pop, Glass, Bottle, Tink, Purr. Blank = silent.")
+        }
+        group("PR Reviews") {
+            row("Review PRs labeled:") {
+                textField()
+                    .bindText(settings::prReviewLabel)
+                    .comment("Teammates' open PRs with this label, plus ones assigned to you or awaiting your review, are pulled down and reviewed automatically. Blank = label ignored.")
+            }
+            row("Check every (minutes):") {
+                intTextField(0..120)
+                    .bindIntText(settings::prPollMinutes)
+                    .comment("0 turns PR watching off.")
+            }
         }
         group("Dev Server") {
             row("Commands (one per line):") {

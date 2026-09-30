@@ -26,6 +26,10 @@ import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.ClaudeStatus
 import dev.akeen.worktreetasks.service.DevServerManager
 import dev.akeen.worktreetasks.service.ParentSync
+import dev.akeen.worktreetasks.service.PrReviewRunner
+import dev.akeen.worktreetasks.service.PrReviewStatus
+import dev.akeen.worktreetasks.service.PrReviewStore
+import dev.akeen.worktreetasks.service.PrWatcher
 import dev.akeen.worktreetasks.service.ReviewTourService
 import dev.akeen.worktreetasks.service.TASKS_CHANGED
 import dev.akeen.worktreetasks.service.TASK_STATUS_CHANGED
@@ -74,6 +78,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(RunSetupAction())
             add(RebaseOnParentAction())
             add(ReviewAction())
+            add(CheckPrsAction())
             addSeparator()
             add(DeleteWorktreeAction())
             addSeparator()
@@ -92,6 +97,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(RunSetupAction())
             addSeparator()
             add(ReviewAction())
+            add(RerunReviewAction())
             add(RebaseOnParentAction())
             add(ChangeParentAction())
             add(RetargetAction())
@@ -372,6 +378,27 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
     }
 
+    private inner class RerunReviewAction :
+        AnAction("Re-run PR Review", "Pull this PR's latest commits and review it again", AllIcons.Actions.Restart) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val pr = selectedTask()?.let { PrReviewStore.getInstance().forWorktree(it.path) }
+            e.presentation.isVisible = pr != null
+            e.presentation.isEnabled = pr != null &&
+                pr.reviewStatus != PrReviewStatus.QUEUED && pr.reviewStatus != PrReviewStatus.REVIEWING
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            val task = selectedTask() ?: return
+            PrReviewStore.getInstance().forWorktree(task.path)?.let { PrReviewRunner.getInstance().enqueue(it) }
+        }
+    }
+
+    private inner class CheckPrsAction :
+        AnAction("Check PRs Now", "Look for teammates' PRs to review now instead of waiting for the next check", AllIcons.Vcs.Fetch) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun actionPerformed(e: AnActionEvent) = PrWatcher.getInstance().pollNow()
+    }
+
     private inner class RebaseOnParentAction :
         AnAction("Rebase on Parent", "Fetch this task's parent branch and rebase onto it", AllIcons.Vcs.Merge) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -444,6 +471,17 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             }
             if (ParentSync.isParentMerged(value.path)) {
                 append("  parent merged", SimpleTextAttributes.ERROR_ATTRIBUTES)
+            }
+            PrReviewStore.getInstance().forWorktree(value.path)?.let { pr ->
+                append("  PR #${pr.number}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                when {
+                    pr.hasNewCommits -> append("  new commits", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                    pr.reviewStatus == PrReviewStatus.QUEUED -> append("  review queued", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    pr.reviewStatus == PrReviewStatus.REVIEWING -> append("  reviewing…", SimpleTextAttributes.GRAYED_ITALIC_ATTRIBUTES)
+                    pr.reviewStatus == PrReviewStatus.READY -> append("  review ready", SimpleTextAttributes.SYNTHETIC_ATTRIBUTES)
+                    pr.reviewStatus == PrReviewStatus.FAILED -> append("  review failed", SimpleTextAttributes.ERROR_ATTRIBUTES)
+                    else -> {}
+                }
             }
             if (value.isDirty) append("  ●", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
             if (value.isLocked) append("  🔒", SimpleTextAttributes.GRAYED_ATTRIBUTES)

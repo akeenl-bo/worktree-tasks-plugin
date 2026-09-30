@@ -45,6 +45,7 @@ object ReviewTourService {
     private class Prepared(val step: ReviewStep, val changed: Boolean, val baseText: String?)
 
     fun open(project: Project, worktree: Path) {
+        runCatching { Files.deleteIfExists(worktree.resolve(ReviewTours.READY_MARKER)) }
         object : Task.Backgroundable(project, "Preparing review", false) {
             override fun run(indicator: ProgressIndicator) {
                 val branch = WorktreeGit.currentBranch(worktree)

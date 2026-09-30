@@ -1,7 +1,6 @@
 package dev.akeen.worktreetasks.service
 
 import com.intellij.notification.NotificationAction
-import com.intellij.notification.NotificationGroupManager
 import com.intellij.notification.NotificationType
 import com.intellij.openapi.Disposable
 import com.intellij.openapi.application.ApplicationManager
@@ -9,10 +8,8 @@ import com.intellij.openapi.components.Service
 import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
-import com.intellij.openapi.wm.IdeFocusManager
 import com.intellij.util.Alarm
 import dev.akeen.worktreetasks.git.WorktreeGit
-import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
 import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.LaunchMode
 import dev.akeen.worktreetasks.startup.ProjectLauncher
@@ -129,34 +126,24 @@ class TaskWatcher : Disposable {
     }
 
     private fun notify(worktree: Worktree, status: ClaudeStatus) {
-        val active = IdeFocusManager.getGlobalInstance().lastFocusedFrame?.project
-        val app = ApplicationManager.getApplication()
         // Looking right at that task's window: its terminal already shows it.
-        if (app.isActive && active?.basePath?.let { Path.of(it).normalize() } == worktree.path) return
+        if (TaskAlerts.isLookingAt(worktree.path)) return
 
         val name = TaskNameStore.getInstance().nameFor(worktree.path.toString())
             ?: worktree.branch
             ?: worktree.path.fileName.toString()
         val message = if (status == ClaudeStatus.NEEDS_INPUT) "$name needs your input" else "$name is done"
-        val notification = NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
-            .createNotification(
-                message,
-                if (status == ClaudeStatus.NEEDS_INPUT) NotificationType.WARNING else NotificationType.INFORMATION,
-            )
-            .addAction(NotificationAction.createSimpleExpiring("Open") { focusTask(worktree.path, name) })
-        if (status == ClaudeStatus.DONE) {
-            notification.addAction(NotificationAction.createSimpleExpiring("Review") {
-                (ProjectLauncher.findOpen(worktree.path) ?: active)?.let { ReviewTourService.open(it, worktree.path) }
-            })
+        val actions = buildList {
+            add(NotificationAction.createSimpleExpiring("Open") { focusTask(worktree.path, name) })
+            if (status == ClaudeStatus.DONE) {
+                add(NotificationAction.createSimpleExpiring("Review") {
+                    (ProjectLauncher.findOpen(worktree.path) ?: TaskAlerts.activeProject())
+                        ?.let { ReviewTourService.open(it, worktree.path) }
+                })
+            }
         }
-        notification.notify(active)
-        // In the background: a macOS banner that opens this task when clicked. In front: the popup
-        // above is enough, so just the sound.
-        val sound = MacNotifier.soundName(WorktreeTasksSettings.getInstance().notificationSound)
-        val inBackground = !app.isActive
-        app.executeOnPooledThread {
-            if (inBackground) MacNotifier.banner(NOTIFICATION_GROUP, message, worktree.path, sound) else MacNotifier.sound(sound)
-        }
+        val type = if (status == ClaudeStatus.NEEDS_INPUT) NotificationType.WARNING else NotificationType.INFORMATION
+        TaskAlerts.show(message, worktree.path, type, actions)
     }
 
     private fun focusTask(path: Path, name: String) {
@@ -167,7 +154,6 @@ class TaskWatcher : Disposable {
 
     companion object {
         private const val POLL_MS = 2000
-        private const val NOTIFICATION_GROUP = "Worktree Tasks"
         private val LOG = Logger.getInstance(TaskWatcher::class.java)
 
         fun getInstance(): TaskWatcher = ApplicationManager.getApplication().getService(TaskWatcher::class.java)

@@ -8,6 +8,9 @@ import com.intellij.openapi.wm.ToolWindowManager
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.DevServerManager
 import dev.akeen.worktreetasks.service.ParentSync
+import dev.akeen.worktreetasks.service.PrWatcher
+import dev.akeen.worktreetasks.service.ReviewTourService
+import dev.akeen.worktreetasks.service.ReviewTours
 import dev.akeen.worktreetasks.service.TaskWatcher
 import dev.akeen.worktreetasks.service.WorktreeProvisioner
 import dev.akeen.worktreetasks.service.installClaudeStatusHooks
@@ -29,6 +32,11 @@ class WorktreeOpenActivity : ProjectActivity {
         val pending = PendingLaunchRegistry.getInstance().take(path)
 
         TaskWatcher.getInstance().ensureStarted()
+        PrWatcher.getInstance().ensureStarted()
+        // A PR review finished while this window was closed: open straight onto it.
+        if (Files.exists(path.resolve(ReviewTours.READY_MARKER))) {
+            ApplicationManager.getApplication().invokeLater { if (!project.isDisposed) ReviewTourService.open(project, path) }
+        }
 
         ApplicationManager.getApplication().executeOnPooledThread {
             // Every task window reports its Claude status, however it was opened.
