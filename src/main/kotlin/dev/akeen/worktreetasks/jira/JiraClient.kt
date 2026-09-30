@@ -95,6 +95,9 @@ class JiraClient private constructor(private val site: String, private val auth:
         return parseIssues("{\"issues\":[$json]}", points).firstOrNull()
     }
 
+    fun descriptionHtml(key: String): String =
+        parseRenderedDescription(get("/rest/api/3/issue/${encode(key)}?fields=description&expand=renderedFields"))
+
     fun issueTypes(projectKey: String): List<IssueType> =
         parseIssueTypes(get("/rest/api/3/issue/createmeta/${encode(projectKey)}/issuetypes?maxResults=100"))
 

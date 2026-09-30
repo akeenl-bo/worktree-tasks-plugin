@@ -74,6 +74,10 @@ internal fun parseIssues(json: String, pointsField: String?): List<JiraIssue> {
     }
 }
 
+/** A ticket's description as Jira renders it to HTML (`expand=renderedFields`); empty when it has none. */
+internal fun parseRenderedDescription(json: String): String =
+    parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject?.obj("renderedFields")?.str("description").orEmpty()
+
 internal data class IssuePage(val issues: List<JiraIssue>, val nextPageToken: String?, val isLast: Boolean)
 
 internal fun parseSearchPage(json: String, pointsField: String?): IssuePage {

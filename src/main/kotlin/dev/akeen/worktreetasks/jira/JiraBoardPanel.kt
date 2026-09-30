@@ -27,6 +27,7 @@ import com.intellij.openapi.vfs.newvfs.events.VFileEvent
 import com.intellij.openapi.wm.ToolWindow
 import com.intellij.openapi.wm.ex.ToolWindowManagerListener
 import com.intellij.ui.DoubleClickListener
+import com.intellij.ui.OnePixelSplitter
 import com.intellij.ui.JBColor
 import com.intellij.ui.PopupHandler
 import com.intellij.ui.SimpleColoredComponent
@@ -100,6 +101,8 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
         border = JBUI.Borders.empty(2, 8)
     }
     private val lists = mutableListOf<JBList<JiraIssue>>()
+    private val details = JiraDetailsPanel()
+    private val split = OnePixelSplitter(false, "WorktreeTasks.JiraBoard.details", 0.72f).apply { secondComponent = details }
     private var data: BoardData? = null
     private var selected: JiraIssue? = null
     private var generation = 0
@@ -198,6 +201,7 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
         settings.jiraSelectedView = currentView()?.name.orEmpty()
         data = null
         selected = null
+        details.clear()
         reload()
     }
 
@@ -253,6 +257,7 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
         loadedAt = System.currentTimeMillis()
         selected = null
         lists.clear()
+        details.forget()
 
         val columnsPanel = ColumnsPanel(board.columns.size)
         board.columns.forEach { (column, issues) ->
@@ -276,10 +281,12 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
                 selected = issues[index]
             }
         }
-        setBody(JBScrollPane(columnsPanel).apply {
+        if (selected == null) details.clear()
+        split.firstComponent = JBScrollPane(columnsPanel).apply {
             verticalScrollBarPolicy = ScrollPaneConstants.VERTICAL_SCROLLBAR_NEVER
             border = JBUI.Borders.empty()
-        })
+        }
+        setBody(split)
         val count = board.columns.sumOf { it.second.size }
         val time = LocalTime.now().format(DateTimeFormatter.ofLocalizedTime(FormatStyle.SHORT))
         status.text = "$count ticket${if (count == 1) "" else "s"} · updated $time"
@@ -331,6 +338,7 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
             val value = selectedValue ?: return@addListSelectionListener
             selected = value
             lists.filter { it !== this }.forEach { it.clearSelection() }
+            showDetails(value)
         }
         // Card heights depend on the column's width (summaries wrap), so drop cached sizes on resize.
         addComponentListener(object : ComponentAdapter() {
@@ -360,6 +368,13 @@ class JiraBoardPanel(private val project: Project, private val toolWindow: ToolW
                 return true
             }
         }.installOn(this)
+    }
+
+    private fun showDetails(issue: JiraIssue) {
+        val board = data ?: return
+        details.show(issue, board.client.browseUrl(issue.key), config.siteUrl, board.tasks[issue.key]?.name) {
+            board.client.descriptionHtml(issue.key)
+        }
     }
 
     private fun startSelected() {
