@@ -52,22 +52,18 @@ class PrReviewRunner : Disposable {
         if (worktree == null) return failed(record, null, "couldn't check it out")
 
         val head = WorktreeGit.revParse(worktree, "HEAD").orEmpty()
-        if (!force && head.isNotEmpty() && alreadyReviewed(worktree, head)) {
-            store.update(record) { status = PrReviewStatus.READY.name; reviewedSha = head }
-            refreshSidebars()
-            return
+        if (force || head.isEmpty() || !alreadyReviewed(worktree, head)) {
+            val exit = try {
+                runClaude(record, worktree)
+            } catch (t: Throwable) {
+                LOG.warn("Review of PR #${record.number} failed to run", t)
+                -1
+            }
+            val tour = if (exit == 0) saveTour(worktree) else null
+            if (tour == null) return failed(record, worktree, if (exit != 0) "claude exited $exit" else "its reply wasn't a review tour")
+            Files.writeString(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE), head)
         }
 
-        val exit = try {
-            runClaude(record, worktree)
-        } catch (t: Throwable) {
-            LOG.warn("Review of PR #${record.number} failed to run", t)
-            -1
-        }
-        val tour = if (exit == 0) saveTour(worktree) else null
-        if (tour == null) return failed(record, worktree, if (exit != 0) "claude exited $exit" else "its reply wasn't a review tour")
-
-        Files.writeString(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE), head)
         store.update(record) {
             status = PrReviewStatus.READY.name
             reviewedSha = head
