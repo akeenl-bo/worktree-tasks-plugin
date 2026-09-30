@@ -5,6 +5,9 @@ import com.google.gson.JsonElement
 import com.google.gson.JsonObject
 import com.google.gson.JsonParser
 import com.google.gson.JsonPrimitive
+import com.intellij.openapi.util.text.StringUtil
+import java.time.OffsetDateTime
+import java.time.format.DateTimeFormatter
 
 /** One ticket as a board card needs it. */
 data class JiraIssue(
@@ -77,6 +80,42 @@ internal fun parseIssues(json: String, pointsField: String?): List<JiraIssue> {
 /** A ticket's description as Jira renders it to HTML (`expand=renderedFields`); empty when it has none. */
 internal fun parseRenderedDescription(json: String): String =
     parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject?.obj("renderedFields")?.str("description").orEmpty()
+
+/** Rendered descriptions by key from a search with `expand=renderedFields`. */
+internal fun parseRenderedDescriptions(json: String): Map<String, String> {
+    val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyMap()
+    return root.arr("issues")?.objects().orEmpty().mapNotNull { issue ->
+        val key = issue.str("key") ?: return@mapNotNull null
+        key to issue.obj("renderedFields")?.str("description").orEmpty()
+    }.toMap()
+}
+
+private val jiraTimestamp = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss.SSSZ")
+
+/** Issues with their status moves, from a search with `expand=changelog`. */
+internal fun parseHistories(json: String, pointsField: String?): List<TicketHistory> {
+    val root = parseJson(json)?.takeIf { it.isJsonObject }?.asJsonObject ?: return emptyList()
+    val issues = parseIssues(json, pointsField).associateBy { it.key }
+    return root.arr("issues")?.objects().orEmpty().mapNotNull { raw ->
+        val issue = raw.str("key")?.let { issues[it] } ?: return@mapNotNull null
+        val changes = raw.obj("changelog")?.arr("histories")?.objects().orEmpty().flatMap { history ->
+            val at = history.str("created")?.let { runCatching { OffsetDateTime.parse(it, jiraTimestamp).toInstant() }.getOrNull() }
+                ?: return@flatMap emptyList()
+            history.arr("items")?.objects().orEmpty()
+                .filter { it.str("field") == "status" }
+                .mapNotNull { item -> item.str("toString")?.let { StatusChange(at, it) } }
+        }
+        TicketHistory(issue, changes)
+    }
+}
+
+/** Jira's rendered HTML as plain text, for handing descriptions to Claude. */
+internal fun htmlToText(html: String): String =
+    StringUtil.unescapeXmlEntities(
+        html.replace(Regex("<(br|/p|/li|/h\\d)[^>]*>", RegexOption.IGNORE_CASE), "\n")
+            .replace(Regex("<li[^>]*>", RegexOption.IGNORE_CASE), "- ")
+            .replace(Regex("<[^>]+>"), ""),
+    ).replace(Regex("[ \t]+"), " ").replace(Regex("\\s*\n\\s*"), "\n").trim()
 
 internal data class IssuePage(val issues: List<JiraIssue>, val nextPageToken: String?, val isLast: Boolean)
 

@@ -123,6 +123,9 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
     /** Issue type the create dialog opens on. */
     var jiraIssueType: String = "Story"
 
+    /** Points to deliver each week on the Jira Board's Dashboard. 0 = use the last four weeks' average. */
+    var jiraWeeklyGoal: Int = 0
+
     override fun getState(): WorktreeTasksSettings = this
 
     override fun loadState(state: WorktreeTasksSettings) {

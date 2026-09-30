@@ -72,21 +72,52 @@ class JiraClient private constructor(private val site: String, private val auth:
 
     fun search(jql: String): List<JiraIssue> {
         val points = pointsField()
-        val issues = mutableListOf<JiraIssue>()
+        return searchPages(jql, issueFields(points).split(","), null).flatMap { parseIssues(it, points) }
+    }
+
+    /** Issues matching [jql] with their status moves (changelog), for weekly delivery stats. */
+    fun histories(jql: String): List<TicketHistory> {
+        val points = pointsField()
+        return searchPages(jql, issueFields(points).split(","), "changelog").flatMap { parseHistories(it, points) }
+    }
+
+    /** Rendered description HTML for each of [keys], in one search. */
+    fun descriptions(keys: Collection<String>): Map<String, String> {
+        if (keys.isEmpty()) return emptyMap()
+        val jql = "key in (${keys.joinToString(",")})"
+        return searchPages(jql, listOf("description"), "renderedFields").fold(emptyMap()) { all, page -> all + parseRenderedDescriptions(page) }
+    }
+
+    /** Names of the site's statuses in the "done" category. */
+    fun doneStatusNames(): Set<String> {
+        val statuses = parseJson(get("/rest/api/3/status"))?.takeIf { it.isJsonArray }?.asJsonArray ?: return emptySet()
+        return statuses.mapNotNull { it.takeIf { e -> e.isJsonObject }?.asJsonObject }
+            .filter { it.getAsJsonObject("statusCategory")?.get("key")?.asString == "done" }
+            .mapNotNull { it.get("name")?.asString }
+            .toSet()
+    }
+
+    /** Raw `search/jql` pages for [jql], up to [MAX_ISSUES] issues. */
+    private fun searchPages(jql: String, fields: List<String>, expand: String?): List<String> {
+        val pages = mutableListOf<String>()
+        var count = 0
         var token: String? = null
-        while (issues.size < MAX_ISSUES) {
+        while (count < MAX_ISSUES) {
             val body = JsonObject().apply {
                 addProperty("jql", jql)
                 addProperty("maxResults", 100)
-                add("fields", JsonArray().apply { issueFields(points).split(",").forEach { add(it) } })
+                add("fields", JsonArray().apply { fields.forEach { add(it) } })
+                expand?.let { addProperty("expand", it) }
                 token?.let { addProperty("nextPageToken", it) }
             }
-            val page = parseSearchPage(post("/rest/api/3/search/jql", body), points)
-            issues += page.issues
+            val json = post("/rest/api/3/search/jql", body)
+            val page = parseSearchPage(json, null)
+            pages += json
+            count += page.issues.size
             token = page.nextPageToken
-            if (page.isLast || token == null) break
+            if (page.isLast || token == null || page.issues.isEmpty()) break
         }
-        return issues
+        return pages
     }
 
     fun issue(key: String): JiraIssue? {

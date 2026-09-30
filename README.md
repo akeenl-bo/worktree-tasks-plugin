@@ -87,6 +87,27 @@ views without one run `jql` alone, grouped by status. `repoPath` is where Start 
 
 Your email and API token go in Settings; the token is kept in the macOS Keychain.
 
+**Dashboard tab.** This week (Monday to Friday) against a weekly point goal set at the top of the tab
+(blank or 0 = your last four weeks' average). A ticket is credited to the week it *first* entered a
+delivered status (from its changelog, so moving on through QA doesn't count it twice); tickets in
+flight count as committed, so what's left to pick up is goal − delivered − in flight. **Today** lists
+in-flight work (review first), then enough ranked To Do tickets to cover today's even share of what's
+left; **Rest of the week** covers the remainder. Your own To Do tickets come before unassigned ones.
+**Ask Claude** has a headless Claude reorder the picks with reasons; that session gets no tools or MCP
+servers, only the ticket data in its prompt. The dashboard never assigns, moves, or edits a ticket.
+
+```json
+"dashboard": {
+  "boardId": 42,
+  "deliveredStatuses": ["Merged", "Ready for QA", "Done"],
+  "reviewStatuses": ["Code Review"],
+  "pickStatuses": ["To Do"]
+}
+```
+
+`boardId` defaults to the first view with a board; empty `deliveredStatuses` means the "done" category
+and empty `pickStatuses` the "To Do" category.
+
 ## Settings — Settings | Tools | Worktree Tasks
 
 - **Claude executable** (default `claude` on PATH)

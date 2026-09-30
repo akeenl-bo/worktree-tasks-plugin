@@ -20,6 +20,7 @@ class JiraConfig {
     /** Create-screen values by field name, e.g. `"Story Points": "2"`. */
     var fieldDefaults: MutableMap<String, String> = mutableMapOf()
     var views: MutableList<JiraView> = mutableListOf()
+    var dashboard: DashboardConfig = DashboardConfig()
 
     val siteUrl: String get() = site.trim().trimEnd('/')
 
@@ -64,4 +65,16 @@ class JiraConfig {
         fun expandHome(path: String): String =
             if (path == "~" || path.startsWith("~/")) System.getProperty("user.home") + path.removePrefix("~") else path
     }
+}
+
+/** The Dashboard tab's inputs: where recommendations come from and which statuses mean what. */
+class DashboardConfig {
+    /** Board whose ranked To Do tickets are recommended. 0 = the first view with a board. */
+    var boardId: Int = 0
+    /** Statuses that count a ticket as delivered the first time it enters one. Empty = the "done" category. */
+    var deliveredStatuses: MutableList<String> = mutableListOf()
+    /** In-flight statuses shown as "in review" rather than "in progress". */
+    var reviewStatuses: MutableList<String> = mutableListOf()
+    /** Statuses a ticket can be recommended from. Empty = the "To Do" category. */
+    var pickStatuses: MutableList<String> = mutableListOf()
 }

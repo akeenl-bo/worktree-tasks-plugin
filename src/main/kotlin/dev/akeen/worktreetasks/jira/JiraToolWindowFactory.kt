@@ -8,8 +8,10 @@ import com.intellij.openapi.wm.ToolWindowFactory
 class JiraToolWindowFactory : ToolWindowFactory, DumbAware {
 
     override fun createToolWindowContent(project: Project, toolWindow: ToolWindow) {
-        val panel = JiraBoardPanel(project, toolWindow)
         val contents = toolWindow.contentManager
-        contents.addContent(contents.factory.createContent(panel, "", false).apply { setDisposer(panel) })
+        val board = JiraBoardPanel(project, toolWindow)
+        contents.addContent(contents.factory.createContent(board, "Board", false).apply { setDisposer(board) })
+        val dashboard = JiraDashboardPanel(project, toolWindow)
+        contents.addContent(contents.factory.createContent(dashboard, "Dashboard", false).apply { setDisposer(dashboard) })
     }
 }
