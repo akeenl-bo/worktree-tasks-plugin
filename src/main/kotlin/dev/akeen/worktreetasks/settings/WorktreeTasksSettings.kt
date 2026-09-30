@@ -41,6 +41,12 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
     var initialPromptTemplate: String = ""
 
     /**
+     * macOS system sound played when a task finishes or needs input (a name from
+     * `/System/Library/Sounds`, e.g. Pop, Glass, Bottle). Blank = silent.
+     */
+    var notificationSound: String = "Pop"
+
+    /**
      * Dev-server commands for a task's stack, one shell command per line (`#` lines are comments).
      * Each runs through a login shell in the worktree directory. Active-only: only the active task's
      * stack runs at a time.

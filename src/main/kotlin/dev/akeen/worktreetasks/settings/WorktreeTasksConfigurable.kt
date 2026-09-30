@@ -38,6 +38,11 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
                 .bindText(settings::initialPromptTemplate)
                 .comment("Optional prompt sent to claude for a new task. <code>{task}</code> = task name.")
         }
+        row("Notification sound:") {
+            textField()
+                .bindText(settings::notificationSound)
+                .comment("Played when a task is done or needs input: a macOS sound such as Pop, Glass, Bottle, Tink, Purr. Blank = silent.")
+        }
         group("Dev Server") {
             row("Commands (one per line):") {
                 textArea()

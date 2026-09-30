@@ -10,9 +10,9 @@ import com.intellij.openapi.diagnostic.Logger
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.project.ProjectManager
 import com.intellij.openapi.wm.IdeFocusManager
-import com.intellij.ui.SystemNotifications
 import com.intellij.util.Alarm
 import dev.akeen.worktreetasks.git.WorktreeGit
+import dev.akeen.worktreetasks.settings.WorktreeTasksSettings
 import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.LaunchMode
 import dev.akeen.worktreetasks.startup.ProjectLauncher
@@ -48,7 +48,9 @@ class TaskWatcher : Disposable {
     fun status(worktree: Path): ClaudeStatus? = statuses[worktree.normalize()]
 
     fun ensureStarted() {
-        if (started.compareAndSet(false, true)) schedule()
+        if (!started.compareAndSet(false, true)) return
+        ApplicationManager.getApplication().executeOnPooledThread { MacNotifier.prepare() }
+        schedule()
     }
 
     override fun dispose() {}
@@ -148,7 +150,13 @@ class TaskWatcher : Disposable {
             })
         }
         notification.notify(active)
-        if (!app.isActive) SystemNotifications.getInstance().notify(NOTIFICATION_GROUP, message, "")
+        // In the background: a macOS banner that opens this task when clicked. In front: the popup
+        // above is enough, so just the sound.
+        val sound = MacNotifier.soundName(WorktreeTasksSettings.getInstance().notificationSound)
+        val inBackground = !app.isActive
+        app.executeOnPooledThread {
+            if (inBackground) MacNotifier.banner(NOTIFICATION_GROUP, message, worktree.path, sound) else MacNotifier.sound(sound)
+        }
     }
 
     private fun focusTask(path: Path, name: String) {
