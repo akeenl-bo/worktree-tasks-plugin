@@ -143,7 +143,8 @@ class PrReviewRunner : Disposable {
         Files.deleteIfExists(worktree.resolve(ReviewTours.TOUR_FILE))
         Files.deleteIfExists(worktree.resolve(ReviewTours.READY_MARKER))
         Files.deleteIfExists(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE))
-        val prompt = prompt(record)
+        Files.deleteIfExists(worktree.resolve(HUNKS_FILE))
+        val prompt = prompt(record, worktree)
         Files.writeString(claudeDir.resolve("review-prompt.md"), prompt)
 
         val configured = WorktreeTasksSettings.getInstance().claudePath.ifBlank { "claude" }
@@ -172,20 +173,40 @@ class PrReviewRunner : Disposable {
         return process.exitValue()
     }
 
-    private fun prompt(record: PrReviewStore.Record): String {
-        val template = PrReviewRunner::class.java.getResourceAsStream("/review/pr-review-prompt.md")
-            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("missing review prompt")
+    private fun prompt(record: PrReviewStore.Record, worktree: Path): String {
         val jiraKey = Regex("\\b[A-Z][A-Z0-9]+-\\d+\\b").find("${record.title} ${record.branch}")?.value
         val jira = jiraKey?.let { "The ticket is $it." }
             ?: "No Jira key is in the PR title or branch; say so in the Jira section and skip this step."
-        return template
+        val base = WorktreeGit.mergeBase(worktree, "HEAD", "origin/${record.base}")
+        return resource("pr-review-prompt.md")
             .replace("{number}", record.number.toString())
             .replace("{title}", record.title)
             .replace("{author}", record.author)
             .replace("{url}", record.url)
             .replace("{base}", "origin/${record.base}")
             .replace("{jira}", jira)
+            .replace("{parts}", base?.let { partsInstructions(worktree, it) }.orEmpty())
     }
+
+    /**
+     * For a PR over [SPLIT_OVER_LINES] reviewable lines: the rules for splitting its
+     * review into parts, with its commits, and a numbered hunk index written for the reviewer to read.
+     */
+    private fun partsInstructions(worktree: Path, base: String): String {
+        val lines = reviewableLines(WorktreeGit.numstat(worktree, base, "HEAD"))
+        if (lines <= SPLIT_OVER_LINES) return ""
+        val files = Hunks.parse(WorktreeGit.diffU0(worktree, base, "HEAD")).filterNot { it.path.startsWith(".idea/") }
+        Files.writeString(worktree.resolve(HUNKS_FILE), Hunks.index(files))
+        val commits = WorktreeGit.commits(worktree, base)
+        return resource("pr-review-parts.md")
+            .replace("{lines}", lines.toString())
+            .replace("{count}", commits.size.toString())
+            .replace("{commits}", commits.joinToString("\n") { (sha, subject) -> "   - $sha $subject" })
+    }
+
+    private fun resource(name: String): String =
+        PrReviewRunner::class.java.getResourceAsStream("/review/$name")
+            ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("missing $name")
 
     private fun failed(record: PrReviewStore.Record, worktree: Path?, why: String) {
         PrReviewStore.getInstance().update(record) { status = PrReviewStatus.FAILED.name }
@@ -233,6 +254,10 @@ class PrReviewRunner : Disposable {
     companion object {
         const val LOG_FILE = ".claude/review-run.log"
         private const val RESULT_FILE = ".claude/review-result.json"
+        private const val HUNKS_FILE = ".claude/review-hunks.md"
+
+        /** PRs with more reviewable lines than this are reviewed in parts. */
+        private const val SPLIT_OVER_LINES = 400
         private const val TIMEOUT_MINUTES = 45L
         private val LOG = Logger.getInstance(PrReviewRunner::class.java)
 
@@ -250,3 +275,10 @@ class PrReviewRunner : Disposable {
         fun getInstance(): PrReviewRunner = ApplicationManager.getApplication().getService(PrReviewRunner::class.java)
     }
 }
+
+/** Changed lines worth reading: specs, schema.rb and lockfiles don't count toward a PR's size. */
+internal fun reviewableLines(numstat: Map<String, Int>): Int =
+    numstat.filterKeys { path ->
+        !(path.startsWith("spec/") || path.startsWith("test/") || path.startsWith("e2e/") || path.startsWith("features/") ||
+            path == "db/schema.rb" || path.endsWith(".lock") || path.endsWith("package-lock.json"))
+    }.values.sum()

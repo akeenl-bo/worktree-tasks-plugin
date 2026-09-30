@@ -27,8 +27,23 @@ data class ReviewSection(val title: String, val bullets: List<String>)
 data class ReviewFinding(val file: String, val line: Int?, val severity: String?, val text: String)
 
 /**
+ * One piece of a big PR, reviewed on its own: either a run of [commits] (in order), or a set of
+ * [hunks] (ids from `.claude/review-hunks.md`, `F:path` for a whole file) when the PR is one big
+ * commit. [summary] and [steps] cover just this piece.
+ */
+data class ReviewPart(
+    val title: String,
+    val why: String?,
+    val commits: List<String>,
+    val hunks: List<String>,
+    val summary: List<String>,
+    val steps: List<ReviewStep>,
+)
+
+/**
  * [summary] is the whole flow as bullets ("When the user clicks X, ..."). PR reviews add [sections]
  * (Jira context, manual test notes, findings) and [findings], which also show on the step they fall in.
+ * A big PR's review also has [parts].
  */
 data class ReviewTour(
     val title: String?,
@@ -38,6 +53,7 @@ data class ReviewTour(
     val findings: List<ReviewFinding> = emptyList(),
     /** The reviewer's overall take on a PR, shown above the flow. */
     val take: String? = null,
+    val parts: List<ReviewPart> = emptyList(),
 )
 
 /**
@@ -80,16 +96,16 @@ object ReviewTours {
 
     internal fun parse(json: String): ReviewTour? {
         val root = runCatching { JsonParser.parseString(json).asJsonObject }.getOrNull() ?: return null
-        val steps = root.getAsJsonArray("steps")?.mapNotNull { element ->
-            val step = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
-            val file = step.text("file")?.removePrefix("./") ?: return@mapNotNull null
-            ReviewStep(
-                file = file,
-                line = step.text("line")?.toIntOrNull(),
-                label = step.text("label"),
-                what = step.text("what") ?: step.text("note"),
-                before = step.text("before"),
-                now = step.text("now"),
+        val steps = parseSteps(root.getAsJsonArray("steps"))
+        val parts = root.getAsJsonArray("parts")?.mapNotNull { element ->
+            val part = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+            ReviewPart(
+                title = part.text("title") ?: return@mapNotNull null,
+                why = part.text("why"),
+                commits = part.getAsJsonArray("commits").strings(),
+                hunks = part.getAsJsonArray("hunks").strings(),
+                summary = part.getAsJsonArray("summary").strings(),
+                steps = parseSteps(part.getAsJsonArray("steps")),
             )
         }.orEmpty()
         val sections = root.getAsJsonArray("sections")?.mapNotNull { element ->
@@ -106,8 +122,22 @@ object ReviewTours {
                 text = finding.text("text") ?: return@mapNotNull null,
             )
         }.orEmpty()
-        return ReviewTour(root.text("title"), root.getAsJsonArray("summary").strings(), steps, sections, findings, root.text("take"))
+        return ReviewTour(root.text("title"), root.getAsJsonArray("summary").strings(), steps, sections, findings, root.text("take"), parts)
     }
+
+    private fun parseSteps(array: com.google.gson.JsonArray?): List<ReviewStep> =
+        array?.mapNotNull { element ->
+            val step = element.takeIf { it.isJsonObject }?.asJsonObject ?: return@mapNotNull null
+            val file = step.text("file")?.removePrefix("./") ?: return@mapNotNull null
+            ReviewStep(
+                file = file,
+                line = step.text("line")?.toIntOrNull(),
+                label = step.text("label"),
+                what = step.text("what") ?: step.text("note"),
+                before = step.text("before"),
+                now = step.text("now"),
+            )
+        }.orEmpty()
 
     /** The JSON object in a model's reply, which may be wrapped in a code fence or stray prose. */
     internal fun extractJsonObject(reply: String): String? {

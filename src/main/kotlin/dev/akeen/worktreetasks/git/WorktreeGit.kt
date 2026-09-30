@@ -281,6 +281,38 @@ object WorktreeGit {
     fun configSet(workDir: Path, key: String, value: String): CommandResult =
         run(workDir, "config", key, value)
 
+    /** `git diff -U0` of [from]..[to] (no context lines, renames as delete + add), for [Hunks.parse]. */
+    fun diffU0(workDir: Path, from: String, to: String): String {
+        val result = run(workDir, "-c", "core.quotePath=false", "diff", "-U0", "--no-renames", "--no-color", from, to)
+        return if (result.success) result.stdout else ""
+    }
+
+    /** Paths changed between two commits. */
+    fun diffNames(workDir: Path, from: String, to: String): List<String> {
+        val result = run(workDir, "-c", "core.quotePath=false", "diff", "--name-only", "--no-renames", from, to)
+        if (!result.success) return emptyList()
+        return result.output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    }
+
+    /** Commits in [from]..HEAD, oldest first, as (short sha, subject). */
+    fun commits(workDir: Path, from: String): List<Pair<String, String>> {
+        val result = run(workDir, "log", "--reverse", "--format=%h %s", "$from..HEAD")
+        if (!result.success) return emptyList()
+        return result.output.lineSequence().filter { it.isNotBlank() }.map { it.substringBefore(' ') to it.substringAfter(' ', "") }.toList()
+    }
+
+    /** Lines added + removed per path between two commits (binary files omitted). */
+    fun numstat(workDir: Path, from: String, to: String): Map<String, Int> {
+        val result = run(workDir, "-c", "core.quotePath=false", "diff", "--numstat", "--no-renames", from, to)
+        if (!result.success) return emptyMap()
+        return result.output.lineSequence().mapNotNull { line ->
+            val parts = line.split('\t')
+            val added = parts.getOrNull(0)?.toIntOrNull() ?: return@mapNotNull null
+            val removed = parts.getOrNull(1)?.toIntOrNull() ?: return@mapNotNull null
+            parts.getOrNull(2)?.let { it to added + removed }
+        }.toMap()
+    }
+
     fun remoteUrl(workDir: Path, remote: String): String? {
         val result = run(workDir, "remote", "get-url", remote)
         return result.output.trim().takeIf { result.success && it.isNotBlank() }

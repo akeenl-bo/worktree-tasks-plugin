@@ -11,4 +11,4 @@ Rules: read only. Do not write or modify any files, and do not post, comment, or
        {"title": "Findings", "bullets": ["[high|medium|low] path:line — what's wrong and why", ...] (or one bullet saying none were found)}
      ]
    - "findings": [{"file": "path", "line": N, "severity": "high|medium|low", "text": "..."}] for the same findings.
-Your final reply must be only the review tour: one JSON object with keys title, summary, sections, findings, steps, and "take" (one short paragraph: what the PR does and your overall take). No prose or code fences around it; the plugin saves it as the tour.
+{parts}Your final reply must be only the review tour: one JSON object with keys title, summary, sections, findings, steps, and "take" (one short paragraph: what the PR does and your overall take). No prose or code fences around it; the plugin saves it as the tour.

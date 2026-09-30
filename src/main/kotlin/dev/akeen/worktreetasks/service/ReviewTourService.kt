@@ -27,6 +27,7 @@ import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.startup.ClaudeLauncher
 import dev.akeen.worktreetasks.startup.ProjectLauncher
 import dev.akeen.worktreetasks.ui.ReviewPanel
+import dev.akeen.worktreetasks.ui.ReviewView
 import java.nio.file.Files
 import java.nio.file.Path
 
@@ -57,8 +58,17 @@ object ReviewTourService {
                     notify(project, "Can't find where this branch left $parentRef.")
                     return
                 }
-                val changes = WorktreeGit.changedFiles(worktree, base)
                 val tour = ReviewTours.read(worktree)
+                if (tour != null && tour.parts.isNotEmpty()) {
+                    val parts = ReviewParts.prepare(worktree, base, tour)
+                    ApplicationManager.getApplication().invokeLater {
+                        if (project.isDisposed) return@invokeLater
+                        val overview = ReviewView("Overview", null, emptyList(), emptyList(), emptyList(), emptyList())
+                        show(project, ReviewPanel(project, worktree, tour, listOf(overview) + parts.map { partView(project, worktree, it) }))
+                    }
+                    return
+                }
+                val changes = WorktreeGit.changedFiles(worktree, base)
                 val steps = ReviewTours.steps(tour, changes.map { it.path }) { Files.isRegularFile(worktree.resolve(it)) }
                 if (steps.isEmpty()) {
                     notify(project, "No changes since $parentRef.")
@@ -74,7 +84,8 @@ object ReviewTourService {
                 ApplicationManager.getApplication().invokeLater {
                     if (project.isDisposed) return@invokeLater
                     val requests = prepared.mapIndexed { index, p -> request(project, worktree, p, index, prepared.size, baseLabel) }
-                    show(project, ReviewPanel(project, worktree, tour, steps, prepared.map { it.changed }, requests))
+                    val view = ReviewView("All changes", null, steps, steps.map { it.line }, prepared.map { it.changed }, requests)
+                    show(project, ReviewPanel(project, worktree, tour, listOf(view)))
                 }
             }
         }.queue()
@@ -113,19 +124,48 @@ object ReviewTourService {
         }
     }
 
+    /** A part's steps as read-only diffs of that part's own before / after versions of each file. */
+    private fun partView(project: Project, worktree: Path, part: PreparedPart): ReviewView {
+        val factory = DiffContentFactory.getInstance()
+        val requests = part.steps.mapIndexed { index, step ->
+            val fileType = FileTypeManager.getInstance().getFileTypeByFileName(step.file.substringAfterLast('/'))
+            val file = part.files[step.file]
+            fun content(text: String?) = text?.takeUnless { fileType.isBinary }?.let { factory.create(project, it, fileType) } ?: factory.createEmpty()
+            val title = "${index + 1}/${part.steps.size} · ${step.label ?: step.file}"
+            val request = if (step.file in part.changed) {
+                SimpleDiffRequest(title, content(file?.before), content(file?.after), part.beforeLabel, part.afterLabel)
+            } else {
+                val same = content(file?.after)
+                SimpleDiffRequest(title, same, same, null, "Unchanged in this part").apply {
+                    putUserData(DiffUserDataKeysEx.FORCE_DIFF_TOOL, UnifiedDiffTool.INSTANCE)
+                    putUserData(DiffUserDataKeysEx.DISABLE_CONTENTS_EQUALS_NOTIFICATION, true)
+                }
+            }
+            request.apply {
+                step.line?.let { putUserData(DiffUserDataKeys.SCROLL_TO_LINE, Pair.create(Side.RIGHT, (it - 1).coerceAtLeast(0))) }
+                val headLine = part.headLines.getOrNull(index)
+                putUserData(DiffUserDataKeys.CONTEXT_ACTIONS, listOf(CommentAction(worktree, step.file, headLine)))
+            }
+        }
+        return ReviewView(part.label, part.part, part.steps, part.headLines, part.steps.map { it.file in part.changed }, requests)
+    }
+
     private fun notify(project: Project, content: String) {
         NotificationGroupManager.getInstance().getNotificationGroup(NOTIFICATION_GROUP)
             .createNotification(content, NotificationType.INFORMATION)
             .notify(project)
     }
 
-    /** Adds `file:line — comment` (line from the caret) to the task's review comments file. */
-    private class CommentAction(private val worktree: Path, private val file: String) :
+    /**
+     * Adds `file:line — comment` (line from the caret) to the task's review comments file. In a part of
+     * a big PR the editor shows that part's version, so the step's line in the current file is used.
+     */
+    private class CommentAction(private val worktree: Path, private val file: String, private val currentLine: Int? = null) :
         AnAction("Comment", "Leave a review comment on the caret's line for Claude", AllIcons.General.Balloon) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun actionPerformed(e: AnActionEvent) {
             val project = e.project ?: return
-            val line = e.getData(CommonDataKeys.EDITOR)?.caretModel?.logicalPosition?.line?.plus(1)
+            val line = if (currentLine != null) currentLine else e.getData(CommonDataKeys.EDITOR)?.caretModel?.logicalPosition?.line?.plus(1)
             val where = if (line != null) "$file:$line" else file
             val text = Messages.showMultilineInputDialog(project, "Comment on $where", "Review Comment", null, null, null)
                 ?.trim()

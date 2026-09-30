@@ -55,6 +55,31 @@ class ReviewToursTest {
     }
 
     @Test
+    fun `reads a big PR's parts, and only counts non-spec lines toward its size`() {
+        val tour = ReviewTours.parse(
+            """
+            {"title": "PR", "summary": [], "steps": [],
+             "parts": [
+               {"title": "Data model", "why": "Later parts write to it.", "hunks": ["H1", "F:db/migrate/1_add.rb"],
+                "summary": ["Adds deal_id to reviews."], "steps": [{"file": "app/models/review.rb", "line": 3, "label": "Review"}]},
+               {"title": "Worker", "commits": ["abc1234", "def5678"], "steps": []},
+               {"why": "No title, ignored"}
+             ]}
+            """.trimIndent(),
+        )!!
+
+        assertEquals(listOf("Data model", "Worker"), tour.parts.map { it.title })
+        assertEquals(listOf("H1", "F:db/migrate/1_add.rb"), tour.parts[0].hunks)
+        assertEquals(listOf("abc1234", "def5678"), tour.parts[1].commits)
+        assertEquals(listOf("Review"), tour.parts[0].steps.map { it.label })
+        assertEquals(
+            120,
+            reviewableLines(mapOf("app/models/review.rb" to 100, "db/migrate/1_add.rb" to 20, "spec/models/review_spec.rb" to 300, "db/schema.rb" to 40)),
+        )
+        assertEquals(listOf(listOf(2, 3), listOf(5)), ReviewParts.runs(listOf(1, 2, 3, 4, 5)) { it != 1 && it != 4 })
+    }
+
+    @Test
     fun `reads a PR review tour out of the reviewer's reply, fenced or not`() {
         val reply = "```json\n" + """
             {"title": "PR #31021", "take": "Fills in the deal from documents.",
