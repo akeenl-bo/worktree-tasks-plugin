@@ -47,11 +47,20 @@ object WorktreeGit {
         val isCheckedOut: Boolean,
     )
 
+    /** Executes git. Swapped in tests for a plain process runner that needs no IDE. */
+    fun interface Runner {
+        fun run(workDir: Path, args: List<String>): CommandResult
+    }
+
+    internal var runner: Runner = Runner { workDir, args -> runWithIdeGit(workDir, args) }
+
     private fun gitPath(): String = GitExecutableManager.getInstance().getPathToGit()
 
-    private fun run(workDir: Path, vararg args: String): CommandResult {
+    private fun run(workDir: Path, vararg args: String): CommandResult = runner.run(workDir, args.toList())
+
+    private fun runWithIdeGit(workDir: Path, args: List<String>): CommandResult {
         val cmd = GeneralCommandLine(gitPath())
-            .withParameters(*args)
+            .withParameters(args)
             .withWorkDirectory(workDir.toString())
             .withCharset(Charsets.UTF_8)
         val out = ExecUtil.execAndGetOutput(cmd)
@@ -79,9 +88,15 @@ object WorktreeGit {
     /**
      * Create a new worktree at [newPath] on a new branch [branch] based on [baseRef].
      * When [branch] already exists, falls back to checking it out instead of creating it.
+     * [noTrack] stops git from making a remote [baseRef] (e.g. `origin/master`) the new branch's upstream.
      */
-    fun add(repoRoot: Path, newPath: Path, branch: String, baseRef: String): CommandResult {
-        val created = run(repoRoot, "worktree", "add", "-b", branch, newPath.toString(), baseRef)
+    fun add(repoRoot: Path, newPath: Path, branch: String, baseRef: String, noTrack: Boolean = false): CommandResult {
+        val createArgs = buildList {
+            add("worktree"); add("add")
+            if (noTrack) add("--no-track")
+            add("-b"); add(branch); add(newPath.toString()); add(baseRef)
+        }
+        val created = run(repoRoot, *createArgs.toTypedArray())
         val result = if (created.success) {
             created
         } else {
@@ -188,9 +203,85 @@ object WorktreeGit {
         return if (result.success && name.isNotBlank() && name != "HEAD") name else null
     }
 
+    /** Remote names (e.g. "origin"). */
+    fun remotes(repoRoot: Path): List<String> {
+        val result = run(repoRoot, "remote")
+        if (!result.success) return emptyList()
+        return result.output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    }
+
+    /** The remote's default branch as a remote ref (e.g. "origin/master"), read from `origin/HEAD`. */
+    fun defaultRemoteBranch(repoRoot: Path): String? {
+        val result = run(repoRoot, "symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD")
+        return result.output.trim().takeIf { result.success && it.isNotBlank() }
+    }
+
+    /** Fetch one [branch] from [remote], updating its remote-tracking ref. */
+    fun fetch(repoRoot: Path, remote: String, branch: String): CommandResult =
+        run(repoRoot, "fetch", "--quiet", remote, branch)
+
+    /** Commit id [ref] points at, or null when it doesn't resolve. */
+    fun revParse(workDir: Path, ref: String): String? {
+        val result = run(workDir, "rev-parse", "--verify", "--quiet", "$ref^{commit}")
+        return result.output.trim().takeIf { result.success && it.isNotBlank() }
+    }
+
+    /** True when [ref] names a local branch or a remote-tracking branch (not a tag, sha, or HEAD). */
+    fun isBranch(workDir: Path, ref: String): Boolean =
+        run(workDir, "show-ref", "--verify", "--quiet", "refs/heads/$ref").success ||
+            run(workDir, "show-ref", "--verify", "--quiet", "refs/remotes/$ref").success
+
+    fun mergeBase(workDir: Path, a: String, b: String): String? {
+        val result = run(workDir, "merge-base", a, b)
+        return result.output.trim().takeIf { result.success && it.isNotBlank() }
+    }
+
+    /** Commits reachable from [to] but not from [from] (`git rev-list --count from..to`). */
+    fun countCommits(workDir: Path, from: String, to: String): Int? {
+        val result = run(workDir, "rev-list", "--count", "$from..$to")
+        return if (result.success) result.output.trim().toIntOrNull() else null
+    }
+
+    /** Replay the current branch's commits after [oldBase] onto [newBase]. */
+    fun rebaseOnto(worktree: Path, newBase: String, oldBase: String, autostash: Boolean): CommandResult {
+        val args = buildList {
+            add("rebase")
+            if (autostash) add("--autostash")
+            add("--onto"); add(newBase); add(oldBase)
+        }
+        return run(worktree, *args.toTypedArray())
+    }
+
+    fun rebaseAbort(worktree: Path): CommandResult = run(worktree, "rebase", "--abort")
+
+    /** Files under [path] that exist at [to] but not at [from]. */
+    fun addedFiles(workDir: Path, from: String, to: String, path: String): List<String> {
+        val result = run(workDir, "diff", "--name-only", "--diff-filter=A", from, to, "--", path)
+        if (!result.success) return emptyList()
+        return result.output.lineSequence().map { it.trim() }.filter { it.isNotEmpty() }.toList()
+    }
+
+    /** True when some remote has a branch named exactly [branch], i.e. it has been pushed. */
+    fun isPublished(workDir: Path, branch: String): Boolean =
+        remotes(workDir).any { run(workDir, "show-ref", "--verify", "--quiet", "refs/remotes/$it/$branch").success }
+
+    /** `git config --get-regexp` as key → value. Keys come back lowercased except the subsection. */
+    fun configGetRegexp(workDir: Path, pattern: String): Map<String, String> {
+        val result = run(workDir, "config", "--get-regexp", pattern)
+        if (!result.success) return emptyMap()
+        return result.output.lineSequence()
+            .map { it.trim() }
+            .filter { it.isNotEmpty() }
+            .associate { line -> line.substringBefore(' ') to line.substringAfter(' ', "") }
+    }
+
+    fun configSet(workDir: Path, key: String, value: String): CommandResult =
+        run(workDir, "config", key, value)
+
     /**
      * Default base directory for new worktrees: a sibling `<repo-name>-worktrees` folder next to
-     * the repo, keeping worktrees outside the repository tree and grouped per project.
+     * the repo, keeping worktrees outside the repository tree and grouped per project. Pass the main
+     * worktree, or worktrees made from another worktree's window end up nested under it.
      */
     fun defaultWorktreeBase(repoRoot: Path): Path {
         val parent = repoRoot.parent ?: repoRoot

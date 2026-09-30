@@ -1,6 +1,7 @@
 package dev.akeen.worktreetasks.action
 
 import com.intellij.openapi.project.Project
+import com.intellij.openapi.ui.ComboBox
 import com.intellij.openapi.ui.DialogWrapper
 import com.intellij.openapi.ui.ValidationInfo
 import com.intellij.ui.components.JBTextField
@@ -11,22 +12,27 @@ import javax.swing.event.DocumentEvent
 import javax.swing.event.DocumentListener
 
 /**
- * Collects the inputs for a new task: a friendly name, the base branch to fork from, and the
- * resulting worktree path (auto-derived from the name but editable).
+ * Collects the inputs for a new task: a friendly name, the parent branch to stack on (the remote
+ * default branch, another task's branch, or any typed ref), and the resulting worktree path
+ * (auto-derived from the name but editable).
  */
 class NewTaskDialog(
     project: Project,
     defaultBaseBranch: String,
+    baseChoices: List<String>,
     private val worktreeBase: Path,
 ) : DialogWrapper(project) {
 
     private val nameField = JBTextField()
-    private val baseBranchField = JBTextField(defaultBaseBranch)
+    private val baseBranchField = ComboBox(baseChoices.toTypedArray()).apply {
+        isEditable = true
+        selectedItem = defaultBaseBranch
+    }
     private val pathField = JBTextField()
     private var pathEditedByUser = false
 
     val taskName: String get() = nameField.text.trim()
-    val baseBranch: String get() = baseBranchField.text.trim()
+    val baseBranch: String get() = baseBranchField.editor.item?.toString()?.trim().orEmpty()
     val branchName: String get() = slug(taskName)
     val worktreePath: Path get() = Path.of(pathField.text.trim())
 
@@ -55,7 +61,7 @@ class NewTaskDialog(
 
     override fun createCenterPanel(): JComponent = panel {
         row("Task name:") { cell(nameField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
-        row("Base branch:") { cell(baseBranchField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
+        row("Parent branch:") { cell(baseBranchField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
         row("Worktree path:") { cell(pathField).align(com.intellij.ui.dsl.builder.AlignX.FILL) }
     }.also { it.preferredSize = it.preferredSize.apply { width = 480 } }
 
@@ -64,7 +70,7 @@ class NewTaskDialog(
     override fun doValidate(): ValidationInfo? {
         if (taskName.isBlank()) return ValidationInfo("Enter a task name", nameField)
         if (slug(taskName).isBlank()) return ValidationInfo("Task name must contain letters or digits", nameField)
-        if (baseBranch.isBlank()) return ValidationInfo("Enter a base branch", baseBranchField)
+        if (baseBranch.isBlank()) return ValidationInfo("Enter a parent branch", baseBranchField)
         if (pathField.text.isBlank()) return ValidationInfo("Enter a worktree path", pathField)
         if (worktreePath.toFile().exists()) return ValidationInfo("Path already exists", pathField)
         return null

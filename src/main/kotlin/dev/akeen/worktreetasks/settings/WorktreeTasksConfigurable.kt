@@ -22,12 +22,12 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
         row("Worktree base directory:") {
             textField()
                 .bindText(settings::worktreeBaseDir)
-                .comment("Where new worktrees are created. Blank = <code>&lt;repo-parent&gt;/.worktrees</code>.")
+                .comment("Where new worktrees are created. Blank = <code>&lt;repo&gt;-worktrees</code> next to the main checkout.")
         }
-        row("Default base branch:") {
+        row("Default parent branch:") {
             textField()
                 .bindText(settings::defaultBaseBranch)
-                .comment("Base ref for new worktrees. Blank = current HEAD.")
+                .comment("Parent for new tasks, fetched first. Blank = the remote's default branch (<code>origin/HEAD</code>, e.g. <code>origin/master</code>).")
         }
         row {
             checkBox("Run claude automatically when a task window opens")

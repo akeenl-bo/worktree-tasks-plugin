@@ -26,6 +26,7 @@ import dev.akeen.worktreetasks.action.OpenBranchAction
 import dev.akeen.worktreetasks.git.WorktreeGit
 import dev.akeen.worktreetasks.service.ClaudeStatus
 import dev.akeen.worktreetasks.service.DevServerManager
+import dev.akeen.worktreetasks.service.ParentSync
 import dev.akeen.worktreetasks.service.readClaudeStatus
 import dev.akeen.worktreetasks.service.TASKS_CHANGED
 import dev.akeen.worktreetasks.service.TaskNameStore
@@ -75,6 +76,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(RunServerAction())
             add(StopServerAction())
             add(RunSetupAction())
+            add(RebaseOnParentAction())
             addSeparator()
             add(DeleteWorktreeAction())
             addSeparator()
@@ -91,6 +93,10 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(RunServerAction())
             add(StopServerAction())
             add(RunSetupAction())
+            addSeparator()
+            add(RebaseOnParentAction())
+            add(ChangeParentAction())
+            add(RetargetAction())
             addSeparator()
             add(DeleteWorktreeAction())
         }
@@ -380,6 +386,45 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
     }
 
+    private inner class RebaseOnParentAction :
+        AnAction("Rebase on Parent", "Fetch this task's parent branch and rebase onto it", AllIcons.Vcs.Merge) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val task = selectedTask()
+            e.presentation.isEnabled = task?.parent != null && task.branch != null
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            val task = selectedTask() ?: return
+            ParentSync.rebaseNow(project, task.path, task.branch ?: return)
+        }
+    }
+
+    private inner class ChangeParentAction :
+        AnAction("Change Parent…", "Stack this task on a different branch", AllIcons.Vcs.BranchNode) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val task = selectedTask()
+            e.presentation.isEnabled = task != null && !task.isMain && task.branch != null
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            val task = selectedTask() ?: return
+            ParentSync.changeParent(project, task.path, task.branch ?: return)
+        }
+    }
+
+    private inner class RetargetAction :
+        AnAction("Retarget to Default Branch", "The parent has merged: move this task onto the default branch", AllIcons.Actions.MoveUp) {
+        override fun getActionUpdateThread() = ActionUpdateThread.EDT
+        override fun update(e: AnActionEvent) {
+            val task = selectedTask()
+            e.presentation.isEnabled = task != null && task.branch != null && ParentSync.isParentMerged(task.path)
+        }
+        override fun actionPerformed(e: AnActionEvent) {
+            val task = selectedTask() ?: return
+            ParentSync.retargetToDefault(project, task.path, task.branch ?: return)
+        }
+    }
+
     private inner class RefreshAction :
         AnAction("Refresh", "Reload the task list", AllIcons.Actions.Refresh) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
@@ -394,6 +439,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             selected: Boolean,
             hasFocus: Boolean,
         ) {
+            toolTipText = null
             icon = when {
                 value.isCurrent -> AllIcons.Actions.Forward
                 value.isMain -> AllIcons.Nodes.Folder
@@ -404,6 +450,15 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
                 append("  $it", SimpleTextAttributes.GRAYED_ATTRIBUTES)
             }
             if (value.isMain) append("  (main)", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+            value.parent?.let { parent ->
+                if (!value.parentIsDefault) append("  on $parent", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                if (value.behindParent > 0) append("  ↓${value.behindParent}", SimpleTextAttributes.GRAYED_ATTRIBUTES)
+                toolTipText = "Stacked on $parent" +
+                    if (value.behindParent > 0) " — ${value.behindParent} commit(s) behind as of the last fetch" else ""
+            }
+            if (ParentSync.isParentMerged(value.path)) {
+                append("  parent merged", SimpleTextAttributes.ERROR_ATTRIBUTES)
+            }
             if (value.isDirty) append("  ●", SimpleTextAttributes.REGULAR_BOLD_ATTRIBUTES)
             if (value.isLocked) append("  🔒", SimpleTextAttributes.GRAYED_ATTRIBUTES)
             if (serverActive(value)) {

@@ -19,12 +19,16 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
     var claudePath: String = "claude"
 
     /**
-     * Base directory under which new worktrees are created. When blank, defaults at runtime to
-     * `<repo-parent>/.worktrees` (see [dev.akeen.worktreetasks.git.WorktreeGit.defaultWorktreeBase]).
+     * Base directory under which new worktrees are created. When blank, defaults at runtime to a
+     * `<repo>-worktrees` folder next to the main checkout (see
+     * [dev.akeen.worktreetasks.git.WorktreeGit.defaultWorktreeBase]).
      */
     var worktreeBaseDir: String = ""
 
-    /** Default base branch/ref for new worktrees. When blank, uses the repository's current HEAD. */
+    /**
+     * Default parent branch for new tasks. When blank, uses the remote's default branch from
+     * `origin/HEAD` (e.g. `origin/master`); see [dev.akeen.worktreetasks.service.ParentSync.defaultBase].
+     */
     var defaultBaseBranch: String = ""
 
     /** Whether to automatically launch `claude` in a terminal when a task window opens. */

@@ -26,6 +26,8 @@
 
         <postStartupActivity implementation="dev.akeen.worktreetasks.startup.WorktreeOpenActivity"/>
 
+        <notificationGroup id="Worktree Tasks" displayType="BALLOON"/>
+
         <applicationConfigurable
             parentId="tools"
             instance="dev.akeen.worktreetasks.settings.WorktreeTasksConfigurable"

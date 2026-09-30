@@ -21,6 +21,12 @@ data class WorktreeTask(
     val isLocked: Boolean,
     /** Whether the worktree has uncommitted changes. */
     val isDirty: Boolean,
+    /** The branch this task is stacked on, if recorded. */
+    val parent: String? = null,
+    /** Commits on [parent] this task doesn't have yet, as of the last fetch. */
+    val behindParent: Int = 0,
+    /** True when [parent] is the default base (e.g. origin/master), so the sidebar needn't name it. */
+    val parentIsDefault: Boolean = true,
 )
 
 /**
@@ -48,6 +54,8 @@ class TaskService(private val project: Project) {
         val root = repoRoot() ?: return emptyList()
         val currentBase = project.basePath?.let { Path.of(it).normalize() }
         val store = TaskNameStore.getInstance()
+        val parents = TaskParents.all(root)
+        val defaultBase = ParentSync.defaultBase(root)
         return WorktreeGit.list(root)
             .filterNot { it.isBare }
             .map { wt ->
@@ -56,6 +64,7 @@ class TaskService(private val project: Project) {
                     ?: wt.branch
                     ?: normalized.fileName?.toString()
                     ?: normalized.toString()
+                val parent = wt.branch?.let { parents[it] }?.takeUnless { wt.isMain }
                 WorktreeTask(
                     name = name,
                     path = normalized,
@@ -65,6 +74,9 @@ class TaskService(private val project: Project) {
                     isCurrent = currentBase != null && currentBase == normalized,
                     isLocked = wt.isLocked,
                     isDirty = WorktreeGit.isDirty(normalized),
+                    parent = parent?.ref,
+                    behindParent = parent?.let { WorktreeGit.countCommits(normalized, "HEAD", it.ref) } ?: 0,
+                    parentIsDefault = parent == null || parent.ref == defaultBase,
                 )
             }
     }

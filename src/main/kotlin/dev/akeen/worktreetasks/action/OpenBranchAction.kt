@@ -39,12 +39,13 @@ class OpenBranchAction :
         }
 
         // Listing branches shells out to git — do it under a modal progress, off the EDT.
-        val refs = ProgressManager.getInstance().runProcessWithProgressSynchronously<List<WorktreeGit.BranchRef>, RuntimeException>(
-            { WorktreeGit.branchRefs(repoRoot) },
-            "Loading Branches…",
-            true,
-            project,
-        )
+        val (refs, mainWorktree) = ProgressManager.getInstance()
+            .runProcessWithProgressSynchronously<Pair<List<WorktreeGit.BranchRef>, Path>, RuntimeException>(
+                { WorktreeGit.branchRefs(repoRoot) to WorktreeGit.mainWorktree(repoRoot) },
+                "Loading Branches…",
+                true,
+                project,
+            )
         val openable = refs.filterNot { it.isCheckedOut }
         if (openable.isEmpty()) {
             Messages.showInfoMessage(
@@ -57,7 +58,7 @@ class OpenBranchAction :
 
         val settings = WorktreeTasksSettings.getInstance()
         val worktreeBase = settings.worktreeBaseDir
-            .ifBlank { WorktreeGit.defaultWorktreeBase(repoRoot).toString() }
+            .ifBlank { WorktreeGit.defaultWorktreeBase(mainWorktree).toString() }
             .let { Path.of(it) }
 
         val dialog = OpenBranchDialog(project, openable, worktreeBase)
