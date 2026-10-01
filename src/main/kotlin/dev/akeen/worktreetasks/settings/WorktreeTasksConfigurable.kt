@@ -71,7 +71,7 @@ class WorktreeTasksConfigurable : BoundConfigurable("Worktree Tasks") {
             row("Review PRs labeled:") {
                 textField()
                     .bindText(settings::prReviewLabel)
-                    .comment("Teammates' open PRs with this label, plus ones assigned to you or awaiting your review, are pulled down and reviewed automatically. Blank = label ignored.")
+                    .comment("Teammates' open PRs with this label, plus ones assigned to you or awaiting your review, are pulled down automatically, ready for Review Changes. Blank = label ignored.")
             }
             row("Check every (minutes):") {
                 intTextField(0..120)

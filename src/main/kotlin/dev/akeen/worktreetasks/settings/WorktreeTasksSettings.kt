@@ -46,7 +46,7 @@ class WorktreeTasksSettings : PersistentStateComponent<WorktreeTasksSettings> {
      */
     var notificationSound: String = "Pop"
 
-    /** Teammates' PRs with this GitHub label get reviewed automatically (as do ones assigned to you or awaiting your review). */
+    /** Teammates' PRs with this GitHub label get pulled down automatically (as do ones assigned to you or awaiting your review). */
     var prReviewLabel: String = "Team AI"
 
     /** How often to check GitHub for PRs to review, in minutes. 0 = off. */

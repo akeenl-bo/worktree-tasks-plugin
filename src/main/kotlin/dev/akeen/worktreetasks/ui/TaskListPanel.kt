@@ -48,6 +48,7 @@ import dev.akeen.worktreetasks.startup.SetupPolicy
 import java.awt.event.MouseEvent
 import java.nio.file.Path
 import javax.swing.DefaultListModel
+import javax.swing.Icon
 import javax.swing.JList
 import javax.swing.ListSelectionModel
 
@@ -94,7 +95,8 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
             add(RunSetupAction())
             addSeparator()
             add(ReviewAction())
-            add(RerunReviewAction())
+            add(PrAction("Pull PR", "Pull this PR's latest commits", AllIcons.Vcs.Fetch, false))
+            add(PrAction("Run Claude Review", "Pull this PR's latest commits and have Claude review it", AllIcons.Actions.Execute, true))
             add(RebaseOnParentAction())
             add(ChangeParentAction())
             add(RetargetAction())
@@ -344,8 +346,8 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
     }
 
-    private inner class RerunReviewAction :
-        AnAction("Re-run PR Review", "Pull this PR's latest commits and review it again", AllIcons.Actions.Restart) {
+    private inner class PrAction(text: String, description: String, icon: Icon, private val withClaude: Boolean) :
+        AnAction(text, description, icon) {
         override fun getActionUpdateThread() = ActionUpdateThread.EDT
         override fun update(e: AnActionEvent) {
             val pr = selectedTask()?.let { PrReviewStore.getInstance().forWorktree(it.path) }
@@ -355,7 +357,7 @@ class TaskListPanel(private val project: Project) : SimpleToolWindowPanel(true, 
         }
         override fun actionPerformed(e: AnActionEvent) {
             val task = selectedTask() ?: return
-            PrReviewStore.getInstance().forWorktree(task.path)?.let { PrReviewRunner.getInstance().enqueue(it, force = true) }
+            PrReviewStore.getInstance().forWorktree(task.path)?.let { PrReviewRunner.getInstance().enqueue(it, withClaude) }
         }
     }
 

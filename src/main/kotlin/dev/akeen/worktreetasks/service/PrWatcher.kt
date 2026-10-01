@@ -64,8 +64,9 @@ internal fun githubRepo(remoteUrl: String): String? =
 /**
  * Watches GitHub for teammates' open PRs that want this user: labeled [WorktreeTasksSettings.prReviewLabel],
  * with a review requested from them, or assigned to them (drafts wait until ready). Each new one is
- * announced and handed to [PrReviewRunner]; new commits on a reviewed PR are only flagged; a merged or
- * closed PR offers to delete its review worktree. Polls every [WorktreeTasksSettings.prPollMinutes].
+ * announced and handed to [PrReviewRunner] to pull down (Claude reviews it only on request); new commits on a
+ * pulled PR are only flagged; a merged or closed PR offers to delete its review worktree. Polls every
+ * [WorktreeTasksSettings.prPollMinutes].
  */
 @Service(Service.Level.APP)
 class PrWatcher : Disposable {
@@ -159,7 +160,7 @@ class PrWatcher : Disposable {
 
     private fun announce(record: PrReviewStore.Record, main: Path) = ApplicationManager.getApplication().invokeLater {
         TaskAlerts.show(
-            "New PR #${record.number} · ${record.title} — reviewing…",
+            "New PR #${record.number} · ${record.title} — pulling it down…",
             main,
             NotificationType.INFORMATION,
             listOf(NotificationAction.createSimpleExpiring("Open on GitHub") { BrowserUtil.browse(record.url) }),

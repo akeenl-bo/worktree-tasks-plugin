@@ -19,9 +19,9 @@ import java.nio.file.Path
 import java.util.concurrent.TimeUnit
 
 /**
- * Reviews teammates' PRs one at a time: checks the PR out into its own worktree (parent = the PR's base,
- * so Task Review shows exactly the PR), then runs `claude -p` there with `review/pr-review-prompt.md`.
- * That session is read-only: it may read code, run read-only git/gh, read Jira, and use the
+ * Pulls teammates' PRs down one at a time: checks the PR out into its own worktree (parent = the PR's base,
+ * so Task Review shows exactly the PR). Only when asked does it then run `claude -p` there with
+ * `review/pr-review-prompt.md`. That session is read-only: it may read code, run read-only git/gh, read Jira, and use the
  * code-review / review-tour skills; it writes nothing and replies with the tour, which is saved here. Nothing is
  * posted anywhere. When it finishes the user is notified and Task Review opens on the PR.
  */
@@ -30,16 +30,16 @@ class PrReviewRunner : Disposable {
 
     private val queue = AppExecutorUtil.createBoundedApplicationPoolExecutor("Worktree Tasks PR reviews", 1)
 
-    /** Queue [record] for review; unless [force], a head commit that already has a tour is just marked ready. */
-    fun enqueue(record: PrReviewStore.Record, force: Boolean = false) {
+    /** Queue [record] to be pulled to its latest commit; [withClaude] also has Claude review it into a tour. */
+    fun enqueue(record: PrReviewStore.Record, withClaude: Boolean = false) {
         PrReviewStore.getInstance().update(record) { status = PrReviewStatus.QUEUED.name }
         refreshSidebars()
-        queue.execute { review(record, force) }
+        queue.execute { review(record, withClaude) }
     }
 
     override fun dispose() {}
 
-    private fun review(record: PrReviewStore.Record, force: Boolean) {
+    private fun review(record: PrReviewStore.Record, withClaude: Boolean) {
         val store = PrReviewStore.getInstance()
         store.update(record) { status = PrReviewStatus.REVIEWING.name }
         refreshSidebars()
@@ -49,10 +49,10 @@ class PrReviewRunner : Disposable {
             LOG.warn("Couldn't check out PR #${record.number}", t)
             null
         }
-        if (worktree == null) return failed(record, null, "couldn't check it out")
+        if (worktree == null) return failed(record, null, withClaude, "couldn't check it out")
 
         val head = WorktreeGit.revParse(worktree, "HEAD").orEmpty()
-        if (force || head.isEmpty() || !alreadyReviewed(worktree, head)) {
+        if (withClaude) {
             val exit = try {
                 runClaude(record, worktree)
             } catch (t: Throwable) {
@@ -60,8 +60,13 @@ class PrReviewRunner : Disposable {
                 -1
             }
             val tour = if (exit == 0) saveTour(worktree) else null
-            if (tour == null) return failed(record, worktree, if (exit != 0) "claude exited $exit" else "its reply wasn't a review tour")
+            if (tour == null) {
+                return failed(record, worktree, withClaude, if (exit != 0) "claude exited $exit" else "its reply wasn't a review tour")
+            }
             Files.writeString(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE), head)
+        } else if (!alreadyReviewed(worktree, head)) {
+            // A tour of older commits would walk the wrong lines; Task Review falls back to the plain diff.
+            clearTour(worktree)
         }
 
         store.update(record) {
@@ -72,7 +77,7 @@ class PrReviewRunner : Disposable {
         refreshSidebars()
         ApplicationManager.getApplication().invokeLater {
             TaskAlerts.show(
-                "PR #${record.number} review ready · ${record.title}",
+                "PR #${record.number} ${if (withClaude) "review" else "pulled and"} ready · ${record.title}",
                 worktree,
                 NotificationType.INFORMATION,
                 listOf(
@@ -126,6 +131,12 @@ class PrReviewRunner : Disposable {
         false
     }
 
+    private fun clearTour(worktree: Path) {
+        Files.deleteIfExists(worktree.resolve(ReviewTours.TOUR_FILE))
+        Files.deleteIfExists(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE))
+        Files.deleteIfExists(worktree.resolve(HUNKS_FILE))
+    }
+
     /** The session replies with the tour as JSON (it can't write files); save it where Task Review reads it. */
     private fun saveTour(worktree: Path): ReviewTour? {
         val envelope = runCatching {
@@ -140,10 +151,8 @@ class PrReviewRunner : Disposable {
 
     private fun runClaude(record: PrReviewStore.Record, worktree: Path): Int {
         val claudeDir = Files.createDirectories(worktree.resolve(".claude"))
-        Files.deleteIfExists(worktree.resolve(ReviewTours.TOUR_FILE))
+        clearTour(worktree)
         Files.deleteIfExists(worktree.resolve(ReviewTours.READY_MARKER))
-        Files.deleteIfExists(worktree.resolve(ReviewTours.REVIEWED_SHA_FILE))
-        Files.deleteIfExists(worktree.resolve(HUNKS_FILE))
         val prompt = prompt(record, worktree)
         Files.writeString(claudeDir.resolve("review-prompt.md"), prompt)
 
@@ -208,7 +217,7 @@ class PrReviewRunner : Disposable {
         PrReviewRunner::class.java.getResourceAsStream("/review/$name")
             ?.use { it.readBytes().toString(Charsets.UTF_8) } ?: error("missing $name")
 
-    private fun failed(record: PrReviewStore.Record, worktree: Path?, why: String) {
+    private fun failed(record: PrReviewStore.Record, worktree: Path?, withClaude: Boolean, why: String) {
         PrReviewStore.getInstance().update(record) { status = PrReviewStatus.FAILED.name }
         refreshSidebars()
         val target = worktree ?: Path.of(record.mainWorktree)
@@ -221,9 +230,10 @@ class PrReviewRunner : Disposable {
                             ?.let { OpenFileDescriptor(project, it).navigate(true) }
                     })
                 }
-                add(NotificationAction.createSimpleExpiring("Retry") { enqueue(record) })
+                add(NotificationAction.createSimpleExpiring("Retry") { enqueue(record, withClaude) })
             }
-            TaskAlerts.show("PR #${record.number} review failed: $why", target, NotificationType.WARNING, actions)
+            val what = if (withClaude) "review" else "pull"
+            TaskAlerts.show("PR #${record.number} $what failed: $why", target, NotificationType.WARNING, actions)
         }
     }
 
